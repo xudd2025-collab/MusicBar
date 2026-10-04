@@ -1,0 +1,15 @@
+{
+  "version": "1.0.10",
+  "notes": "新增版本显示、更新提示点及自动检查；支持备用下载线路和 SHA-256 校验。",
+  "release_url": "https://github.com/xudd2025-collab/MusicBar/releases/tag/v1.0.10",
+  "installer": {
+    "name": "MusicBar-Setup-1.0.10.exe",
+    "sha256": "1a75c7b0e6c9937e0b638dbfb1b24342b47a202f96c1462a235b2d4e68e531e3",
+    "urls": [
+      "https://github.com/xudd2025-collab/MusicBar/releases/download/v1.0.10/MusicBar-Setup-1.0.10.exe",
+      "https://raw.githubusercontent.com/xudd2025-collab/MusicBar/updates/releases/v1.0.10/MusicBar-Setup-1.0.10.exe",
+      "https://cdn.jsdelivr.net/gh/xudd2025-collab/MusicBar@updates/releases/v1.0.10/MusicBar-Setup-1.0.10.exe",
+      "https://fastly.jsdelivr.net/gh/xudd2025-collab/MusicBar@updates/releases/v1.0.10/MusicBar-Setup-1.0.10.exe"
+    ]
+  }
+}
