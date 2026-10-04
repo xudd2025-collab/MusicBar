@@ -1,0 +1,51 @@
+name: Build and publish
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag (v1.0.10)
+        required: true
+permissions:
+  contents: write
+concurrency:
+  group: musicbar-release
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+      - name: Build and check
+        shell: pwsh
+        run: |
+          ./build.ps1 -Check
+          ./checks/Run-OverlayChecks.ps1 -RenderOnly
+          $version = ([Version](Get-Item release/MusicBar.exe).VersionInfo.FileVersion).ToString(3)
+          if ("v$version" -ne $env:RELEASE_TAG) { throw 'Tag and assembly version differ.' }
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+      - name: Build clean packages
+        shell: pwsh
+        run: ./installer/Build-Installer.ps1 -SkipBuild
+      - name: Publish release and fallback
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          $manifest = Get-Content dist/update.json -Raw | ConvertFrom-Json
+          gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --verify-tag --title "MusicBar $($manifest.version)" --notes-file CHANGELOG.md "dist/$($manifest.installer.name)" "dist/MusicBar-Portable-$($manifest.version).zip" dist/SHA256SUMS.txt
+            if ($LASTEXITCODE -ne 0) { throw 'Release publication failed.' }
+          } else {
+            gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --pattern $manifest.installer.name --clobber --dir dist
+            if ($LASTEXITCODE -ne 0) { throw 'Cannot read the already published installer.' }
+            $manifest.installer.sha256 = (Get-FileHash -LiteralPath "dist/$($manifest.installer.name)" -Algorithm SHA256).Hash.ToLowerInvariant()
+            $manifest | ConvertTo-Json -Depth 5 | Set-Content dist/update.json -Encoding utf8
+          }
+          ./installer/Publish-Update.ps1 -Repository $env:GITHUB_REPOSITORY
