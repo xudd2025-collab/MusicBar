@@ -424,6 +424,7 @@ namespace MusicBar
         [DllImport("user32.dll")] internal static extern IntPtr GetDC(IntPtr window);
         [DllImport("user32.dll")] internal static extern int ReleaseDC(IntPtr window, IntPtr dc);
         [DllImport("gdi32.dll")] internal static extern IntPtr CreateCompatibleDC(IntPtr dc);
+        [DllImport("gdi32.dll", CharSet = CharSet.Unicode)] internal static extern uint GetGlyphIndices(IntPtr dc, string text, int count, [Out] ushort[] glyphs, uint flags);
         [DllImport("gdi32.dll")] internal static extern bool DeleteDC(IntPtr dc);
         [DllImport("gdi32.dll")] internal static extern IntPtr SelectObject(IntPtr dc, IntPtr handle);
         [DllImport("gdi32.dll")] internal static extern bool DeleteObject(IntPtr handle);

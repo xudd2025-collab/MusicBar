@@ -37,6 +37,7 @@ namespace MusicBar
             return long.TryParse(id, NumberStyles.None, CultureInfo.InvariantCulture, out number) && number > 0;
         }
         public bool HasTrack { get { return Player != MusicPlayer.None && !string.IsNullOrWhiteSpace(Title); } }
+        internal MusicSnapshot Copy() { return (MusicSnapshot)MemberwiseClone(); }
         public double CurrentPosition
         {
             get
@@ -57,8 +58,16 @@ namespace MusicBar
     {
         public double Seconds;
         public string Text;
+        public double EndSeconds;
+        public List<LyricWord> Words = new List<LyricWord>();
         public LyricLine() { Text = ""; }
         public LyricLine(double seconds, string text) { Seconds = seconds; Text = text ?? ""; }
+    }
+
+    public sealed class LyricWord
+    {
+        public int StartIndex, Length;
+        public double StartSeconds, EndSeconds;
     }
 
     public sealed class LyricDocument
@@ -70,6 +79,8 @@ namespace MusicBar
         public List<LyricLine> TranslationLines = new List<LyricLine>();
         public string TranslationSource = "";
         public string TranslationStatus = "";
+        public string WordTiming = "", TranslationWordTiming = "";
+        public bool WordTimingChecked;
         public bool HasTimedLyrics { get { return Lines.Count > 0; } }
         public bool HasTranslation
         {
@@ -101,6 +112,8 @@ namespace MusicBar
         public string Artist = "";
         public string Album = "";
         public double DurationSeconds;
+        public List<string> TitleAliases = new List<string>();
+        public List<string> AlbumAliases = new List<string>();
         public override string ToString() { return Title + "  ·  " + Artist + (string.IsNullOrEmpty(Album) ? "" : "  ·  " + Album); }
     }
 
@@ -113,6 +126,8 @@ namespace MusicBar
         [DataMember] public bool OnlineLyrics = true;
         [DataMember] public bool AutoCheckUpdates = true;
         [DataMember] public bool HideWhenPaused = false;
+        [DataMember] public bool HideInstrumental = true;
+        [DataMember] public double InstrumentalHoldSeconds = 10;
         [DataMember] public bool TwoLines = false;
         [DataMember] public bool ShowTranslation = true;
         [DataMember] public bool LongLineScroll = true;
@@ -121,10 +136,18 @@ namespace MusicBar
         [DataMember] public bool FollowTaskbar = true;
         [DataMember] public bool PreviewEnabled = false;
         [DataMember] public string FontFamily = "Microsoft YaHei UI";
-        [DataMember] public float FontSize = 14;
-        [DataMember] public int LyricBrightness = 115;
-        [DataMember] public string TextColor = "#F8FAFC";
-        [DataMember] public string ActiveColor = "#4ADE80";
+        [DataMember] public string TranslationFontFamily = "";
+        [DataMember] public float FontSize = 16;
+        [DataMember] public int LyricBrightness = 100;
+        [DataMember] public string TextColor = "#D5DEE9";
+        [DataMember] public string ActiveColor = "#7CCEFF";
+        [DataMember] public string TranslationColor = "#AAB8C8";
+        [DataMember] public string TranslationActiveColor = "#EAF2FA";
+        [DataMember] public bool KaraokeEnabled = true;
+        [DataMember] public bool BoldLyrics = true;
+        [DataMember] public bool HideTaskbarIcon = false;
+        [DataMember] public bool EnableHotkey = true;
+        [DataMember] public int HotkeyPreset = 0;
         [DataMember] public int Width = 420;
         [DataMember] public int HorizontalOffset = 0;
         [DataMember] public int VerticalOffset = 0;
@@ -140,7 +163,15 @@ namespace MusicBar
             ShowTranslation = true;
             LongLineScroll = true;
             LyricBrightness = 115;
+            TranslationColor = "";
+            TranslationActiveColor = "";
+            TranslationFontFamily = "";
             AutoCheckUpdates = true;
+            HideInstrumental = true;
+            InstrumentalHoldSeconds = 10;
+            KaraokeEnabled = true;
+            BoldLyrics = true;
+            EnableHotkey = true;
         }
 
         public void Normalize()
@@ -151,12 +182,18 @@ namespace MusicBar
             HorizontalOffset = Math.Max(-20000, Math.Min(20000, HorizontalOffset));
             VerticalOffset = Math.Max(-2000, Math.Min(2000, VerticalOffset));
             OffsetSeconds = Math.Max(-120, Math.Min(120, OffsetSeconds));
+            if (double.IsNaN(InstrumentalHoldSeconds) || double.IsInfinity(InstrumentalHoldSeconds)) InstrumentalHoldSeconds = 10;
+            InstrumentalHoldSeconds = Math.Max(3, Math.Min(20, InstrumentalHoldSeconds));
             MonitorIndex = Math.Max(0, Math.Min(20, MonitorIndex));
             if (!Enum.IsDefined(typeof(MusicPlayer), PreferredPlayer)) PreferredPlayer = MusicPlayer.None;
             if (Alignment != "left" && Alignment != "center" && Alignment != "right") Alignment = "left";
             if (string.IsNullOrWhiteSpace(FontFamily)) FontFamily = "Microsoft YaHei UI";
+            if (string.IsNullOrWhiteSpace(TranslationFontFamily)) TranslationFontFamily = "";
             if (!ValidColor(TextColor)) TextColor = "#F8FAFC";
             if (!ValidColor(ActiveColor)) ActiveColor = "#4ADE80";
+            if (!ValidColor(TranslationColor)) TranslationColor = TextColor;
+            if (!ValidColor(TranslationActiveColor)) TranslationActiveColor = ActiveColor;
+            HotkeyPreset = Math.Max(0, Math.Min(2, HotkeyPreset));
         }
         public static bool ValidColor(string value)
         {
@@ -165,10 +202,16 @@ namespace MusicBar
         }
         public Color Foreground { get { return ColorTranslator.FromHtml(TextColor); } }
         public Color Highlight { get { return ColorTranslator.FromHtml(ActiveColor); } }
+        public Color TranslationForeground { get { return ColorTranslator.FromHtml(ValidColor(TranslationColor) ? TranslationColor : TextColor); } }
+        public Color TranslationHighlight { get { return ColorTranslator.FromHtml(ValidColor(TranslationActiveColor) ? TranslationActiveColor : ActiveColor); } }
         public Color Brightened(Color color)
         {
             double factor = LyricBrightness / 100.0;
-            return Color.FromArgb(color.A, Math.Min(255, (int)Math.Round(color.R * factor)), Math.Min(255, (int)Math.Round(color.G * factor)), Math.Min(255, (int)Math.Round(color.B * factor)));
+            int maximum = Math.Max(color.R, Math.Max(color.G, color.B));
+            // Cap the gain as a whole, so pale custom colors retain their hue instead
+            // of clipping all three channels independently to white.
+            if (maximum > 0) factor = Math.Min(factor, 255.0 / maximum);
+            return Color.FromArgb(color.A, (int)Math.Round(color.R * factor), (int)Math.Round(color.G * factor), (int)Math.Round(color.B * factor));
         }
     }
 }

@@ -40,12 +40,14 @@ namespace MusicBar
         private Label startupHint;
         private readonly bool startInTray;
         private readonly AppUpdateService updateService;
+        private readonly AppHotkey appHotkey = new AppHotkey();
+        private Label hotkeyHint;
         private readonly CancellationTokenSource updateLifetime = new CancellationTokenSource();
         private readonly System.Windows.Forms.Timer updateTimer = new System.Windows.Forms.Timer { Interval = 1000 };
         private RoundedButton versionButton;
-        private Button checkUpdateButton, downloadUpdateButton, installUpdateButton, releasePageButton;
-        private Label updateStatus, updateVersion, updateNotes;
-        private ProgressBar updateProgress;
+        private Button checkUpdateButton, downloadUpdateButton;
+        private Label updateStatus, updateVersion, updateNotes, updateProgressText;
+        private DownloadProgress updateProgress;
         private bool updateBusy;
         private string downloadedUpdate = "";
         private UpdateRelease downloadedRelease;
@@ -56,6 +58,7 @@ namespace MusicBar
             this.controller = controller;
             this.overlay = overlay;
             this.startInTray = startInTray;
+            ShowInTaskbar = !controller.Settings.HideTaskbarIcon;
             updateService = new AppUpdateService(AppDomain.CurrentDomain.BaseDirectory, controller.Store.DataDirectory);
             RememberNetEasePath();
             Text = "任务栏歌词 · MusicBar";
@@ -93,6 +96,7 @@ namespace MusicBar
                 SyncPositionControls(); controller.Store.Save(controller.Settings); controller.Notify();
             };
             controller.Changed += ControllerChanged;
+            controller.PlaybackFrame += PlaybackFrameChanged;
             FormClosing += delegate(object sender, FormClosingEventArgs e)
             {
                 if (!exiting && e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; tray.Visible = true; Hide(); }
@@ -112,6 +116,25 @@ namespace MusicBar
         {
             base.OnHandleCreated(e);
             Theme.ApplyDarkWindow(Handle);
+            UpdateHotkey();
+        }
+        protected override void OnHandleDestroyed(EventArgs e)
+        {
+            appHotkey.Dispose(); base.OnHandleDestroyed(e);
+        }
+        protected override void WndProc(ref Message message)
+        {
+            if (message.Msg == 0x0312 && message.WParam.ToInt32() == AppHotkey.Id)
+            { RestoreWindow(); return; }
+            base.WndProc(ref message);
+        }
+        private void UpdateHotkey()
+        {
+            bool enabled = controller.Settings.EnableHotkey;
+            bool success = false;
+            if (enabled && IsHandleCreated) success = appHotkey.Register(Handle, controller.Settings.HotkeyPreset);
+            else appHotkey.Dispose();
+            if (hotkeyHint != null) hotkeyHint.Text = !enabled ? "快捷键已关闭，可双击托盘图标打开。" : success ? "在其他软件中也可按此快捷键打开 MusicBar。" : "快捷键未注册，可能已被其他软件占用；请选择另一组合。";
         }
 
         private void BuildInterface()
@@ -233,25 +256,60 @@ namespace MusicBar
             overlaySwitch.CheckedChanged += delegate { if (!updating) { s.OverlayEnabled = overlaySwitch.Checked; Apply(false); } };
             onlineSwitch = Theme.Check("自动获取在线歌词", s.OnlineLyrics); onlineSwitch.CheckedChanged += delegate { if (!updating) { s.OnlineLyrics = onlineSwitch.Checked; if (!s.OnlineLyrics && searchRequest != null) searchRequest.Cancel(); Apply(true); } };
             switches.Controls.Add(overlaySwitch); switches.Controls.Add(onlineSwitch); page.Controls.Add(switches);
+            var previewCard = Theme.Card(); previewCard.Height = 118; previewCard.Margin = new Padding(0, 0, 0, 14);
+            var previewTitle = Theme.Label("外观预览 · 演唱进度示例", 9, Theme.Muted); previewTitle.SetBounds(18, 10, 360, 28); previewCard.Controls.Add(previewTitle);
+            var palette = Theme.Button("应用推荐配色", false); palette.SetBounds(570, 8, 154, 32); palette.Anchor = AnchorStyles.Top | AnchorStyles.Right; previewCard.Controls.Add(palette);
+            previewImage = new PictureBox { BackColor = Theme.Surface, SizeMode = PictureBoxSizeMode.CenterImage }; previewImage.SetBounds(16, 43, 716, 66); previewImage.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right; previewCard.Controls.Add(previewImage); page.Controls.Add(previewCard);
             var display = SettingsGrid("显示样式");
+            var style = Theme.Combo(); style.AccessibleName = "字体风格"; style.Items.AddRange(new object[] { "清晰雅黑 · 加粗", "轻盈等线 · 常规", "自定义字体" });
+            SyncFontStyle(style); AddSetting(display, "字体风格", style, "两款推荐风格可切换，保留你选择的颜色。");
             var family = Theme.Combo();
             using (var fonts = new System.Drawing.Text.InstalledFontCollection())
             {
                 foreach (var font in fonts.Families) family.Items.Add(font.Name);
             }
             if (!family.Items.Contains(s.FontFamily)) family.Items.Add(s.FontFamily);
-            family.SelectedItem = s.FontFamily; family.SelectedIndexChanged += delegate { if (!updating) { s.FontFamily = family.SelectedItem.ToString(); Apply(false); } };
-            AddSetting(display, "字体", family, "建议使用微软雅黑，兼容中文歌词。");
-            var size = Theme.Number(10, 30, (decimal)s.FontSize, 0); size.ValueChanged += delegate { if (!updating) { s.FontSize = (float)size.Value; Apply(false); } }; AddSetting(display, "字号", size, "任务栏内会按可用高度适配。");
+            family.SelectedItem = s.FontFamily; family.SelectedIndexChanged += delegate { if (!updating && family.SelectedItem != null) { s.FontFamily = family.SelectedItem.ToString(); SyncFontStyle(style); Apply(false); } };
+            AddSetting(display, "原文字体", family, "建议使用微软雅黑，兼容中文歌词。");
+            var translatedFamily = Theme.Combo(); translatedFamily.Items.Add("跟随原文字体");
+            foreach (var fontName in family.Items) translatedFamily.Items.Add(fontName);
+            if (s.TranslationFontFamily.Length > 0 && !translatedFamily.Items.Contains(s.TranslationFontFamily)) translatedFamily.Items.Add(s.TranslationFontFamily);
+            if (s.TranslationFontFamily.Length == 0) translatedFamily.SelectedIndex = 0; else translatedFamily.SelectedItem = s.TranslationFontFamily;
+            translatedFamily.SelectedIndexChanged += delegate
+            {
+                if (!updating && translatedFamily.SelectedIndex >= 0) { s.TranslationFontFamily = translatedFamily.SelectedIndex == 0 ? "" : translatedFamily.SelectedItem.ToString(); SyncFontStyle(style); Apply(false); }
+            };
+            AddSetting(display, "译文字体", translatedFamily, "可跟随原文或单独选择；缺少中文字形时使用清晰雅黑。");
+            var size = Theme.Number(10, 30, (decimal)s.FontSize, 0); size.ValueChanged += delegate { if (!updating) { s.FontSize = (float)size.Value; SyncFontStyle(style); Apply(false); } }; AddSetting(display, "字号", size, "任务栏内会按可用高度适配。");
             var brightness = Theme.Number(30, 160, s.LyricBrightness, 0); brightness.Increment = 5;
             brightness.ValueChanged += delegate { if (!updating) { s.LyricBrightness = (int)brightness.Value; Apply(false); } };
-            AddSetting(display, "歌词亮度（%）", brightness, "100 为原始颜色；提高数值可提亮文字，默认 115。");
-            var colors = new FlowLayoutPanel { Height = 35, Width = 270, WrapContents = false, Margin = new Padding(0) };
-            var activeColor = Theme.Button("当前行颜色", false); activeColor.Width = 124; activeColor.ForeColor = s.Highlight;
-            activeColor.Click += delegate { using (var dialog = new ColorDialog { Color = s.Highlight, FullOpen = true }) { if (dialog.ShowDialog(this) == DialogResult.OK) { s.ActiveColor = ColorCode(dialog.Color); activeColor.ForeColor = dialog.Color; Apply(false); } } };
-            var textColor = Theme.Button("下一行颜色", false); textColor.Width = 124; textColor.ForeColor = s.Foreground;
-            textColor.Click += delegate { using (var dialog = new ColorDialog { Color = s.Foreground, FullOpen = true }) { if (dialog.ShowDialog(this) == DialogResult.OK) { s.TextColor = ColorCode(dialog.Color); textColor.ForeColor = dialog.Color; Apply(false); } } };
-            colors.Controls.Add(activeColor); colors.Controls.Add(textColor); AddSetting(display, "颜色", colors, "文字带阴影，透明背景。");
+            AddSetting(display, "歌词亮度（%）", brightness, "100 为所选颜色；提亮保留色相，推荐 100。");
+            var colors = new FlowLayoutPanel { Height = 40, Width = 270, WrapContents = false, Margin = new Padding(0) };
+            var originalBase = ColorButton("未唱颜色", delegate { return s.Foreground; }, delegate(string value) { s.TextColor = value; }); originalBase.AccessibleName = "原文未唱颜色";
+            var originalSung = ColorButton("已唱颜色", delegate { return s.Highlight; }, delegate(string value) { s.ActiveColor = value; }); originalSung.AccessibleName = "原文已唱颜色";
+            colors.Controls.Add(originalBase); colors.Controls.Add(originalSung);
+            AddSetting(display, "原文颜色", colors, "未唱文字和已唱文字可分别设置。");
+            var translatedColors = new FlowLayoutPanel { Height = 40, Width = 270, WrapContents = false, Margin = new Padding(0) };
+            var translatedBase = ColorButton("未唱颜色", delegate { return s.TranslationForeground; }, delegate(string value) { s.TranslationColor = value; }); translatedBase.AccessibleName = "译文未唱颜色";
+            var translatedSung = ColorButton("已唱颜色", delegate { return s.TranslationHighlight; }, delegate(string value) { s.TranslationActiveColor = value; }); translatedSung.AccessibleName = "译文已唱颜色";
+            translatedColors.Controls.Add(translatedBase); translatedColors.Controls.Add(translatedSung);
+            AddSetting(display, "译文颜色", translatedColors, "译文配色独立于原文。");
+            palette.Click += delegate
+            {
+                s.TextColor = "#D5DEE9"; s.ActiveColor = "#7CCEFF"; s.TranslationColor = "#AAB8C8"; s.TranslationActiveColor = "#EAF2FA"; s.LyricBrightness = 100;
+                bool previous = updating; updating = true; brightness.Value = 100; updating = previous;
+                SetColorSample(originalBase, s.Foreground); SetColorSample(originalSung, s.Highlight);
+                SetColorSample(translatedBase, s.TranslationForeground); SetColorSample(translatedSung, s.TranslationHighlight); Apply(false);
+            };
+            var karaoke = Theme.Check("随演唱进度逐字变色", s.KaraokeEnabled); karaoke.CheckedChanged += delegate { if (!updating) { s.KaraokeEnabled = karaoke.Checked; Apply(false); } }; AddSetting(display, "演唱进度", karaoke, "无逐字时间戳时按句内进度估算；暂停、拖动跟随播放器。");
+            var bold = Theme.Check("加粗文字", s.BoldLyrics); bold.CheckedChanged += delegate { if (!updating) { s.BoldLyrics = bold.Checked; SyncFontStyle(style); Apply(false); } }; AddSetting(display, "字体清晰度", bold, "减轻描边，改善任务栏小字的可读性。");
+            style.SelectedIndexChanged += delegate
+            {
+                if (updating || style.SelectedIndex < 0 || style.SelectedIndex > 1) return;
+                s.FontFamily = style.SelectedIndex == 0 ? "Microsoft YaHei UI" : "等线"; s.TranslationFontFamily = ""; s.FontSize = 16; s.BoldLyrics = style.SelectedIndex == 0;
+                if (!family.Items.Contains(s.FontFamily)) family.Items.Add(s.FontFamily);
+                bool previous = updating; updating = true; family.SelectedItem = s.FontFamily; translatedFamily.SelectedIndex = 0; size.Value = 16; bold.Checked = s.BoldLyrics; updating = previous; Apply(false);
+            };
             var lines = Theme.Check("显示下一行（双行）", s.TwoLines); lines.CheckedChanged += delegate { if (!updating) { s.TwoLines = lines.Checked; Apply(false); } }; AddSetting(display, "行数", lines, "双行会在任务栏高度内缩小字号。");
             var translation = Theme.Check("显示当前句译文", s.ShowTranslation); translation.CheckedChanged += delegate { if (!updating) { s.ShowTranslation = translation.Checked; Apply(false); } }; AddSetting(display, "歌词翻译", translation, "有译文时第二行显示译文；没有译文时按行数设置显示。");
             var scroll = Theme.Check("长歌词自动滚动", s.LongLineScroll); scroll.CheckedChanged += delegate { if (!updating) { s.LongLineScroll = scroll.Checked; Apply(false); } }; AddSetting(display, "长句显示", scroll, "自动滚动查看整句；关闭后缩小字号完整显示。");
@@ -279,10 +337,22 @@ namespace MusicBar
             preferred.SelectedIndexChanged += delegate { if (!updating) { s.PreferredPlayer = (MusicPlayer)preferred.SelectedIndex; Apply(false); } }; AddSetting(behavior, "播放器选择", preferred, "多个播放器同时播放时按优先级选择。");
             var click = Theme.Check("锁定位置（鼠标穿透）", s.ClickThrough); positionLock = click; click.CheckedChanged += delegate { if (!updating && s.ClickThrough != click.Checked) TogglePositionLock(); }; AddSetting(behavior, "歌词拖动", click, "取消锁定后，可按住歌词左右拖动。");
             var pause = Theme.Check("暂停时隐藏歌词", s.HideWhenPaused); pause.CheckedChanged += delegate { if (!updating) { s.HideWhenPaused = pause.Checked; Apply(false); } }; AddSetting(behavior, "暂停播放", pause, "默认暂停时保留当前行。");
+            var instrumental = Theme.Check("前奏、间奏和尾奏隐藏歌词", s.HideInstrumental); instrumental.CheckedChanged += delegate { if (!updating) { s.HideInstrumental = instrumental.Checked; Apply(false); } }; AddSetting(behavior, "伴奏片段", instrumental, "空行、间奏标记和制作信息自动隐藏；下一句开始时恢复。");
+            var instrumentalHold = Theme.Number(3, 20, (decimal)s.InstrumentalHoldSeconds, 1); instrumentalHold.Increment = 0.5M;
+            instrumentalHold.ValueChanged += delegate { if (!updating) { s.InstrumentalHoldSeconds = (double)instrumentalHold.Value; Apply(false); } }; AddSetting(behavior, "长间隔停留（秒）", instrumentalHold, "歌词未标注唱完时间时，长间隔中的旧句按此时间收起；拖长音可调大。");
             var missing = Theme.Check("没有歌词时显示歌名", s.ShowSongWhenMissing); missing.CheckedChanged += delegate { if (!updating) { s.ShowSongWhenMissing = missing.Checked; Apply(false); } }; AddSetting(behavior, "无歌词", missing, "未连接播放器时不会显示虚构歌词。");
             page.Controls.Add(behavior);
-            previewImage = new PictureBox { Height = 76, BackColor = Theme.Input, SizeMode = PictureBoxSizeMode.CenterImage, Margin = new Padding(0, 4, 0, 12) }; page.Controls.Add(previewImage);
             var preview = Theme.Button("开启 / 关闭任务栏预览", false); preview.Height = 40; preview.Click += delegate { positionPreview = false; s.PreviewEnabled = !s.PreviewEnabled; Apply(false); }; page.Controls.Add(preview);
+        }
+        private void SyncFontStyle(ComboBox style)
+        {
+            var s = controller.Settings; int selected = 2;
+            if (Math.Abs(s.FontSize - 16) < .01f && s.TranslationFontFamily.Length == 0)
+            {
+                if (s.FontFamily == "Microsoft YaHei UI" && s.BoldLyrics) selected = 0;
+                else if (s.FontFamily == "等线" && !s.BoldLyrics) selected = 1;
+            }
+            bool previous = updating; updating = true; style.SelectedIndex = selected; updating = previous;
         }
         private TableLayoutPanel SettingsGrid(string title)
         {
@@ -300,6 +370,21 @@ namespace MusicBar
             grid.Controls.Add(label, 0, row); grid.Controls.Add(input, 1, row); grid.Controls.Add(explanation, 2, row);
         }
         private static string ColorCode(Color color) { return "#" + color.R.ToString("X2") + color.G.ToString("X2") + color.B.ToString("X2"); }
+        private Button ColorButton(string label, Func<Color> read, Action<string> write)
+        {
+            var button = Theme.Button(label, false); button.Width = 124; SetColorSample(button, read());
+            button.Click += delegate
+            {
+                using (var dialog = new ColorDialog { Color = read(), FullOpen = true })
+                    if (dialog.ShowDialog(this) == DialogResult.OK) { write(ColorCode(dialog.Color)); SetColorSample(button, dialog.Color); Apply(false); }
+            };
+            return button;
+        }
+        private static void SetColorSample(Button button, Color color)
+        {
+            var rounded = (RoundedButton)button; rounded.ShowColorSample = true; rounded.ColorSample = color;
+            rounded.AccessibleDescription = "所选颜色 " + ColorCode(color); rounded.Invalidate();
+        }
 
         private void BuildLyrics()
         {
@@ -382,6 +467,36 @@ namespace MusicBar
                 }
             };
             page.Controls.Add(card);
+            var access = Theme.Card(); access.Height = 228; access.Margin = new Padding(0, 0, 0, 18);
+            var hiddenIcon = Theme.Check("隐藏任务栏应用图标", controller.Settings.HideTaskbarIcon); hiddenIcon.Location = new Point(24, 18); access.Controls.Add(hiddenIcon);
+            hiddenIcon.CheckedChanged += delegate { if (!updating) { controller.Settings.HideTaskbarIcon = hiddenIcon.Checked; ShowInTaskbar = !hiddenIcon.Checked; controller.Store.Save(controller.Settings); } };
+            var hotkeyEnabled = Theme.Check("使用快捷键打开 MusicBar", controller.Settings.EnableHotkey); hotkeyEnabled.Location = new Point(24, 66); access.Controls.Add(hotkeyEnabled);
+            var hotkeyChoice = Theme.Combo(); hotkeyChoice.Items.AddRange(new object[] { "Ctrl + Alt + M", "Ctrl + Shift + M", "Alt + Shift + M" }); hotkeyChoice.SelectedIndex = controller.Settings.HotkeyPreset; hotkeyChoice.SetBounds(24, 112, 270, 32); access.Controls.Add(hotkeyChoice);
+            hotkeyHint = Theme.Label("", 9, Theme.Muted); hotkeyHint.SetBounds(24, 160, 700, 48); access.Controls.Add(hotkeyHint);
+            hotkeyEnabled.CheckedChanged += delegate { if (!updating) { controller.Settings.EnableHotkey = hotkeyEnabled.Checked; UpdateHotkey(); controller.Store.Save(controller.Settings); } };
+            hotkeyChoice.SelectedIndexChanged += delegate { if (!updating) { controller.Settings.HotkeyPreset = hotkeyChoice.SelectedIndex; UpdateHotkey(); controller.Store.Save(controller.Settings); } };
+            page.Controls.Add(access);
+            var netease = Theme.Card(); netease.Height = 204; netease.Margin = new Padding(0, 0, 0, 18);
+            var neteaseTitle = Theme.Label("网易云稳定接入", 13, Theme.Text); neteaseTitle.Font = Theme.Font(13, FontStyle.Bold); neteaseTitle.SetBounds(24, 18, 520, 30); netease.Controls.Add(neteaseTitle);
+            var neteaseHint = Theme.Label("修复现有快捷方式，普通打开也能同步歌词。原启动方式会先备份，可随时还原。\n配置后，已运行的网易云需退出并重新打开一次。", 9, Theme.Muted); neteaseHint.SetBounds(24, 58, 730, 66); neteaseHint.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right; netease.Controls.Add(neteaseHint);
+            var configureNetEase = Theme.Button("修复网易云启动方式", false); configureNetEase.SetBounds(24, 140, 190, 36); netease.Controls.Add(configureNetEase);
+            configureNetEase.Click += delegate
+            {
+                if (MessageBox.Show(this, "为网易云的桌面、开始菜单和已固定快捷方式加入本机进度接入参数，并新增一个桌面入口。原快捷方式会备份。本操作不重开播放器。是否修复？", "修复网易云启动方式", MessageBoxButtons.OKCancel, MessageBoxIcon.Information) != DialogResult.OK) return;
+                try
+                {
+                    RememberNetEasePath();
+                    string path = ""; try { path = File.ReadAllText(Path.Combine(controller.Store.DataDirectory, "netease-player-path.txt")).Trim(); } catch { }
+                    if (!NetEaseLaunchIntegration.ValidPlayer(path))
+                        using (var dialog = new OpenFileDialog { Title = "选择网易云安装目录的 cloudmusic.exe", Filter = "cloudmusic.exe|cloudmusic.exe", CheckFileExists = true })
+                        { if (dialog.ShowDialog(this) != DialogResult.OK) return; path = dialog.FileName; }
+                    neteaseHint.Text = NetEaseLaunchIntegration.Configure(path, controller.Store.DataDirectory); SaveNetEasePath(path);
+                }
+                catch (Exception ex) { neteaseHint.Text = "修复失败：" + ex.Message; }
+            };
+            var restoreNetEase = Theme.Button("还原启动方式", false); restoreNetEase.SetBounds(232, 140, 148, 36); netease.Controls.Add(restoreNetEase);
+            restoreNetEase.Click += delegate { try { neteaseHint.Text = NetEaseLaunchIntegration.Restore(controller.Store.DataDirectory); } catch (Exception ex) { neteaseHint.Text = "还原失败：" + ex.Message; } };
+            page.Controls.Add(netease);
             var updates = Theme.Card(); updates.Height = 115; updates.Margin = new Padding(0, 0, 0, 18);
             var automatic = Theme.Check("自动检查 MusicBar 更新", controller.Settings.AutoCheckUpdates); automatic.Location = new Point(24, 18); updates.Controls.Add(automatic);
             var updateHint = Theme.Label("启动后定期检查；网络恢复后重试。有新版本时右上角显示提示点。", 9, Theme.Muted); updateHint.SetBounds(24, 62, 730, 35); updateHint.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right; updates.Controls.Add(updateHint);
@@ -394,18 +509,19 @@ namespace MusicBar
         }
         private void BuildUpdates()
         {
-            var page = Page("软件更新", "自动发现新版本，下载并校验后由你选择安装。");
-            var card = Theme.Card(); card.Height = 430; card.Margin = new Padding(0, 12, 0, 18);
+            var page = Page("软件更新", "发现新版后，点击一次即可下载并打开安装向导。");
+            var card = Theme.Card(); card.Height = 398; card.Margin = new Padding(0, 12, 0, 18);
             updateVersion = Theme.Label("当前版本 " + AppUpdateService.VersionLabel, 16, Theme.Text); updateVersion.Font = Theme.Font(16, FontStyle.Bold); updateVersion.SetBounds(24, 20, 730, 38); updateVersion.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right; card.Controls.Add(updateVersion);
             updateStatus = Theme.Label("等待检查更新", 10, Theme.Accent); updateStatus.SetBounds(24, 67, 730, 44); updateStatus.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right; card.Controls.Add(updateStatus);
-            updateNotes = Theme.Label("", 10, Theme.Muted); updateNotes.AutoEllipsis = true; updateNotes.SetBounds(24, 123, 730, 168); updateNotes.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right; card.Controls.Add(updateNotes);
-            updateProgress = new ProgressBar { Minimum = 0, Maximum = 100 }; updateProgress.SetBounds(24, 307, 730, 12); updateProgress.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right; card.Controls.Add(updateProgress);
-            card.SizeChanged += delegate { int width = Math.Max(1, card.ClientSize.Width - 48); updateVersion.Width = width; updateStatus.Width = width; updateNotes.Width = width; updateProgress.Width = width; };
-            checkUpdateButton = Theme.Button("检查更新", false); checkUpdateButton.SetBounds(24, 345, 125, 40); checkUpdateButton.Click += async delegate { await CheckForUpdates(); }; card.Controls.Add(checkUpdateButton);
-            downloadUpdateButton = Theme.Button("下载新版本", true); downloadUpdateButton.SetBounds(163, 345, 138, 40); downloadUpdateButton.Click += async delegate { await DownloadUpdate(); }; card.Controls.Add(downloadUpdateButton);
-            installUpdateButton = Theme.Button("安装更新", true); installUpdateButton.SetBounds(315, 345, 125, 40); installUpdateButton.Click += delegate { InstallUpdate(); }; card.Controls.Add(installUpdateButton);
-            releasePageButton = Theme.Button("打开发布页", false); releasePageButton.SetBounds(454, 345, 130, 40); releasePageButton.Click += delegate { var latest = updateService.Latest; OpenUpdateUrl(latest == null ? "https://github.com/" + updateService.Repository + "/releases" : latest.ReleaseUrl); }; card.Controls.Add(releasePageButton); page.Controls.Add(card);
+            updateNotes = Theme.Label("", 10, Theme.Muted); updateNotes.AutoEllipsis = true; updateNotes.TextAlign = ContentAlignment.TopLeft; updateNotes.SetBounds(24, 123, 730, 140); updateNotes.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right; card.Controls.Add(updateNotes);
+            updateProgress = new DownloadProgress { Visible = false }; updateProgress.SetBounds(24, 285, 658, 20); updateProgress.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right; card.Controls.Add(updateProgress);
+            updateProgressText = Theme.Label("", 9, Theme.Accent); updateProgressText.Visible = false; updateProgressText.TextAlign = ContentAlignment.MiddleRight; updateProgressText.SetBounds(688, 281, 66, 28); updateProgressText.Anchor = AnchorStyles.Top | AnchorStyles.Right; card.Controls.Add(updateProgressText);
+            card.SizeChanged += delegate { int width = Math.Max(1, card.ClientSize.Width - 48); updateVersion.Width = width; updateStatus.Width = width; updateNotes.Width = width; updateProgress.Width = Math.Max(1, width - 76); updateProgressText.Left = card.ClientSize.Width - 90; };
+            checkUpdateButton = Theme.Button("检查更新", false); checkUpdateButton.SetBounds(24, 330, 125, 40); checkUpdateButton.Click += async delegate { await CheckForUpdates(); }; card.Controls.Add(checkUpdateButton);
+            downloadUpdateButton = Theme.Button("下载并安装", true); downloadUpdateButton.SetBounds(163, 330, 164, 40); downloadUpdateButton.Click += async delegate { await DownloadUpdate(); }; card.Controls.Add(downloadUpdateButton); page.Controls.Add(card);
             var hint = Theme.Label("更新检查使用 GitHub 与 jsDelivr 备用线路，下载失败自动切换。\n所有线路暂时不可用时会稍后重试，已发现的更新提示仍会保留。\n安装期间 MusicBar 会退出，设置和缓存会保留，音乐播放器继续运行。", 9, Theme.Muted); hint.Height = 94; page.Controls.Add(hint);
+            var releases = new LinkLabel { Text = "查看发布记录 ↗", AutoSize = true, LinkColor = Theme.Muted, ActiveLinkColor = Theme.Accent, VisitedLinkColor = Theme.Muted, BackColor = Theme.Background, Font = Theme.Font(9, FontStyle.Regular), LinkBehavior = LinkBehavior.HoverUnderline, Margin = new Padding(0, 0, 0, 10) };
+            releases.LinkClicked += delegate { var latest = updateService.Latest; OpenUpdateUrl(latest == null ? "https://github.com/" + updateService.Repository + "/releases" : latest.ReleaseUrl); }; releases.Enabled = updateService.Configured; page.Controls.Add(releases);
         }
         private void RefreshUpdateView()
         {
@@ -414,11 +530,9 @@ namespace MusicBar
             versionButton.AccessibleDescription = available ? "发现新版本 v" + latest.Version : "点击查看软件更新";
             updateVersion.Text = "当前版本 " + AppUpdateService.VersionLabel + (available ? "    →    v" + latest.Version : "");
             updateStatus.Text = updateService.Status;
-            updateNotes.Text = latest == null ? "检查成功后会显示新版说明。" : latest.Notes;
+            updateNotes.Text = available ? "新版说明\n\n" + (string.IsNullOrWhiteSpace(latest.Notes) ? "此版本未提供更新说明。" : latest.Notes) : "发现新版本时，这里会显示更新内容。\n\n点击「下载并安装」后，程序会下载并校验安装包，\n随后打开安装向导并退出 MusicBar。";
             checkUpdateButton.Enabled = !updateBusy && updateService.Configured;
             downloadUpdateButton.Enabled = !updateBusy && available;
-            installUpdateButton.Enabled = !updateBusy && available && downloadedRelease != null && latest.Version == downloadedRelease.Version && File.Exists(downloadedUpdate);
-            releasePageButton.Enabled = updateService.Configured;
         }
         private async Task CheckForUpdates()
         {
@@ -431,32 +545,48 @@ namespace MusicBar
         }
         private async Task DownloadUpdate()
         {
-            if (updateBusy || updateService.Latest == null) return;
-            updateBusy = true; downloadedUpdate = ""; downloadedRelease = null; RefreshUpdateView(); updateProgress.Value = 0; updateStatus.Text = "正在下载，失败时自动切换线路…";
+            if (updateBusy || IsDisposed || updateLifetime.IsCancellationRequested || updateService.Latest == null || !updateService.Latest.IsNew) return;
+            updateBusy = true; bool acceptingProgress = true; RefreshUpdateView();
+            updateProgress.Value = 0; updateProgress.Indeterminate = true; updateProgress.Visible = updateProgressText.Visible = true;
+            updateProgressText.Text = "连接中"; downloadUpdateButton.Text = "正在下载…"; updateStatus.Text = "正在下载，失败时自动切换线路…";
             try
             {
                 var release = updateService.Latest;
-                var progress = new Progress<int>(value => { if (!IsDisposed && !updateLifetime.IsCancellationRequested) { updateProgress.Value = value; updateStatus.Text = "正在下载更新 · " + value + "%"; } });
-                downloadedUpdate = await updateService.DownloadAsync(release, progress, updateLifetime.Token); downloadedRelease = release;
-                if (!IsDisposed && !updateLifetime.IsCancellationRequested) updateStatus.Text = "下载完成，SHA-256 校验通过。点击「安装更新」继续。";
+                var progress = new Progress<int>(value =>
+                {
+                    if (!acceptingProgress || IsDisposed || updateLifetime.IsCancellationRequested) return;
+                    updateProgress.Indeterminate = value < 0; updateProgress.Value = value;
+                    updateProgressText.Text = value < 0 ? "连接中" : value + "%";
+                    updateStatus.Text = value < 0 ? "正在连接下载线路…" : value >= 100 ? "下载完成，正在校验…" : "正在下载更新 · " + value + "%";
+                });
+                bool reusable = downloadedRelease != null && release.Version == downloadedRelease.Version && string.Equals(release.Sha256, downloadedRelease.Sha256, StringComparison.OrdinalIgnoreCase) && AppUpdateService.VerifyFile(downloadedUpdate, release.Sha256);
+                if (!reusable) downloadedUpdate = await updateService.DownloadAsync(release, progress, updateLifetime.Token);
+                downloadedRelease = release; acceptingProgress = false;
+                if (IsDisposed || updateLifetime.IsCancellationRequested) return;
+                updateProgress.Indeterminate = false; updateProgress.Value = 100; updateProgressText.Text = "100%";
+                downloadUpdateButton.Text = "打开安装向导…"; updateStatus.Text = "校验通过，正在打开安装向导…";
+                InstallUpdate();
             }
-            catch (OperationCanceledException) { }
-            catch (Exception ex) { if (!IsDisposed && !updateLifetime.IsCancellationRequested) updateStatus.Text = "下载失败：" + ex.Message; }
+            catch (OperationCanceledException) { if (!IsDisposed && !updateLifetime.IsCancellationRequested) updateStatus.Text = "更新已取消，可稍后重试。"; }
+            catch (Exception ex) { if (!IsDisposed && !updateLifetime.IsCancellationRequested) updateStatus.Text = "更新未完成，可重试：" + ex.Message; }
             finally
             {
-                updateBusy = false;
-                if (!IsDisposed && !updateLifetime.IsCancellationRequested) { string status = updateStatus.Text; RefreshUpdateView(); updateStatus.Text = status; }
+                acceptingProgress = false; updateBusy = false;
+                if (!IsDisposed && !updateLifetime.IsCancellationRequested)
+                {
+                    updateProgress.Indeterminate = false; updateProgress.Visible = updateProgressText.Visible = false; downloadUpdateButton.Text = "下载并安装";
+                    string status = updateStatus.Text; RefreshUpdateView(); updateStatus.Text = status;
+                }
             }
         }
         private void InstallUpdate()
         {
-            try
+            if (downloadedRelease == null || !downloadedRelease.IsNew || !AppUpdateService.VerifyFile(downloadedUpdate, downloadedRelease.Sha256)) throw new IOException("安装文件校验失败，请重新下载。");
+            using (var installer = Process.Start(new ProcessStartInfo(downloadedUpdate, "/DIR=\"" + AppDomain.CurrentDomain.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar) + "\"") { UseShellExecute = true }))
             {
-                if (downloadedRelease == null || !AppUpdateService.VerifyFile(downloadedUpdate, downloadedRelease.Sha256)) throw new IOException("安装文件校验失败，请重新下载。");
-                Process.Start(new ProcessStartInfo(downloadedUpdate, "/DIR=\"" + AppDomain.CurrentDomain.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar) + "\"") { UseShellExecute = true });
+                if (installer == null) throw new IOException("安装向导未能启动，请稍后重试。");
                 ExitApplication();
             }
-            catch (Exception ex) { ShowError("无法安装更新", ex.Message); }
         }
         private void OpenUpdateUrl(string url)
         {
@@ -614,10 +744,15 @@ namespace MusicBar
         private void UpdateOverlay()
         {
             overlay.SetPreview(controller.Settings.PreviewEnabled);
-            string lineKey = controller.Settings.PreviewEnabled ? "preview" : controller.Snapshot.PlaybackKey + "|" + controller.CurrentLineIndex;
+            string lineKey = controller.Settings.PreviewEnabled ? "preview" : controller.CurrentLineIndex < 0 || controller.IsSongInfo ? "" : controller.Snapshot.PlaybackKey + "|" + controller.CurrentLineIndex;
             overlay.SetLineTiming(lineKey, controller.RemainingLineSeconds > 0 ? controller.RemainingLineSeconds : double.NaN,
                 controller.Settings.PreviewEnabled || (controller.ManualMode ? controller.ManualPlaying : controller.Snapshot.IsPlaying));
             overlay.SetLyrics(controller.Current, controller.Next, controller.CurrentTranslation, controller.ShouldDisplay);
+            PlaybackFrameChanged(this, EventArgs.Empty);
+        }
+        private void PlaybackFrameChanged(object sender, EventArgs args)
+        {
+            if (!IsDisposed) overlay.SetKaraokeProgress(controller.OriginalKaraokeProgress, controller.TranslationKaraokeProgress);
         }
         private void UpdatePreview()
         {
@@ -671,7 +806,7 @@ namespace MusicBar
             var start = new ProcessStartInfo(path) { UseShellExecute = true, WorkingDirectory = Path.GetDirectoryName(path) };
             if (player == MusicPlayer.NetEase)
             {
-                start.Arguments = "--remote-debugging-port=9223 --remote-debugging-address=127.0.0.1";
+                start.Arguments = NetEaseLaunchIntegration.Arguments;
                 SaveNetEasePath(path);
             }
             Process.Start(start);
@@ -687,7 +822,7 @@ namespace MusicBar
             try { File.WriteAllText(Path.Combine(controller.Store.DataDirectory, "netease-player-path.txt"), path); } catch { }
         }
         private void ShowError(string title, string message) { MessageBox.Show(this, message, title, MessageBoxButtons.OK, MessageBoxIcon.Information); }
-        public void RestoreWindow() { Hide(); ShowInTaskbar = true; Show(); WindowState = FormWindowState.Normal; Activate(); }
+        public void RestoreWindow() { ShowInTaskbar = !controller.Settings.HideTaskbarIcon; Show(); WindowState = FormWindowState.Normal; Activate(); }
         public void ExitApplication() { exiting = true; tray.Visible = false; Close(); Application.Exit(); }
         protected override void Dispose(bool disposing)
         {
@@ -696,6 +831,8 @@ namespace MusicBar
                 NetworkChange.NetworkAvailabilityChanged -= NetworkAvailabilityChanged;
                 updateTimer.Stop(); updateTimer.Dispose(); updateLifetime.Cancel(); updateService.Dispose();
                 controller.Changed -= ControllerChanged;
+                controller.PlaybackFrame -= PlaybackFrameChanged;
+                appHotkey.Dispose();
                 if (searchRequest != null) { searchRequest.Cancel(); searchRequest.Dispose(); }
                 if (previewImage != null && previewImage.Image != null) previewImage.Image.Dispose();
                 if (tray != null) tray.Dispose();

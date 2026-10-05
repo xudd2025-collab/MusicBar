@@ -194,10 +194,12 @@ namespace MusicBar
             if (!Validate(release, Repository) || !release.IsNew) throw new InvalidOperationException("没有可安装的新版本。");
             Directory.CreateDirectory(downloadDirectory);
             string destination = Path.Combine(downloadDirectory, release.FileName);
+            if (VerifyFile(destination, release.Sha256)) { token.ThrowIfCancellationRequested(); if (progress != null) progress.Report(100); return destination; }
             var urls = release.DownloadUrls.Concat(new[] { "https://raw.githubusercontent.com/" + Repository + "/updates/releases/v" + release.Version + "/" + release.FileName, "https://cdn.jsdelivr.net/gh/" + Repository + "@updates/releases/v" + release.Version + "/" + release.FileName, "https://fastly.jsdelivr.net/gh/" + Repository + "@updates/releases/v" + release.Version + "/" + release.FileName }).Distinct().ToList();
             foreach (string url in urls)
             {
                 token.ThrowIfCancellationRequested();
+                if (progress != null) progress.Report(-1);
                 string temporary = destination + "." + Guid.NewGuid().ToString("N") + ".part";
                 using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(token))
                 {

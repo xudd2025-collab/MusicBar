@@ -10,6 +10,7 @@ checks/*
 !checks/Checks.cs
 !checks/TimelineTimingChecks.cs
 !checks/NetEaseBridgeChecks.cs
+!checks/QQMatchingChecks.cs
 !checks/UpdateChecks.cs
 !checks/OverlayChecks.cs
 !checks/Run-OverlayChecks.ps1

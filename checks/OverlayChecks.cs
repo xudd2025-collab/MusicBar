@@ -337,6 +337,8 @@ namespace MusicBar
                     using (Bitmap preview = overlay.RenderPreview(420, 80)) { }
                     Check(first.Offset == before && second.Offset == beforeSecond, "A settings preview must not change live lyric animation.");
                     settings.HorizontalOffset = 20;
+                    settings.TextColor = "#5484D1"; settings.TranslationColor = "#5484D1";
+                    overlay.UpdateSettings(settings);
                     using (Bitmap originalBrightness = CurrentBitmap(overlay, 300, 60))
                     {
                         settings.LyricBrightness = 160;
@@ -551,6 +553,100 @@ namespace MusicBar
 
         private static void VerifyPreview()
         {
+            bool hasDengXian = false;
+            try { using (var font = new FontFamily("等线")) hasDengXian = true; } catch (ArgumentException) { }
+            using (LyricOverlay overlay = new LyricOverlay())
+            {
+                var settings = new AppSettings { OverlayEnabled = false, FontFamily = "Mistral", FontSize = 16, BoldLyrics = false };
+                overlay.UpdateSettings(settings); overlay.SetLyrics("Flowers beside your window", "", "就不会开在你的窗前", true); overlay.SetLineTiming("font|0", 10, false); overlay.SetKaraokeProgress(.3, .3);
+                using (Bitmap latinAndChinese = CurrentBitmap(overlay, 600, 72))
+                {
+                    settings.TranslationFontFamily = "Microsoft YaHei UI"; overlay.UpdateSettings(settings);
+                    using (Bitmap explicitChinese = CurrentBitmap(overlay, 600, 72)) Check(PixelDifference(latinAndChinese, explicitChinese, new Rectangle(0, 36, 600, 36)) == 0, "A Latin font lacking CJK glyphs falls back to clear Chinese glyphs for translation.");
+                    settings.TranslationFontFamily = "等线"; overlay.UpdateSettings(settings);
+                    using (Bitmap independent = CurrentBitmap(overlay, 600, 72))
+                    {
+                        if (hasDengXian) Check(PixelDifference(latinAndChinese, independent, new Rectangle(0, 36, 600, 36)) > 100, "An independent translation font visibly changes Chinese glyphs.");
+                        Check(PixelDifference(latinAndChinese, independent, new Rectangle(0, 0, 600, 36)) == 0, "Changing the translation font preserves original glyphs and karaoke progress.");
+                        CheckMargins(independent); SaveDark(independent, "overlay-independent-translation-font.png");
+                    }
+                    settings.TranslationFontFamily = ""; settings.FontFamily = "等线"; overlay.UpdateSettings(settings);
+                    using (Bitmap followed = CurrentBitmap(overlay, 600, 72)) if (hasDengXian) Check(PixelDifference(latinAndChinese, followed, new Rectangle(0, 36, 600, 36)) > 100, "Following a CJK-capable original font changes translated glyphs as well.");
+                }
+            }
+            if (!hasDengXian) Console.WriteLine("Font shape comparison omitted: DengXian is not installed; fallback rendering remains checked.");
+            using (LyricOverlay overlay = new LyricOverlay())
+            {
+                var settings = new AppSettings { OverlayEnabled = false, LyricBrightness = 145, TextColor = "#F9FDF7", TranslationColor = "#F8FCF8", ActiveColor = "#3D45EB", TranslationActiveColor = "#3D45EB" };
+                overlay.UpdateSettings(settings); overlay.SetLyrics("就不会开在你的窗前", "", "The flowers beside your window", true); overlay.SetLineTiming("palette|0", 10, false); overlay.SetKaraokeProgress(.3, .3);
+                using (Bitmap before = CurrentBitmap(overlay, 600, 72))
+                {
+                    settings.TextColor = "#AAC6EA"; overlay.UpdateSettings(settings);
+                    using (Bitmap originalChange = CurrentBitmap(overlay, 600, 72))
+                    {
+                        Check(PixelDifference(before, originalChange, new Rectangle(0, 0, 600, 36)) > 100, "Changing the unsung original color repaints the current line immediately, including at 145 percent brightness.");
+                        Check(PixelDifference(before, originalChange, new Rectangle(0, 36, 600, 36)) == 0, "Changing the original palette preserves translation colors.");
+                        settings.TranslationColor = "#CEAEC8"; overlay.UpdateSettings(settings);
+                        using (Bitmap translationChange = CurrentBitmap(overlay, 600, 72))
+                        {
+                            Check(PixelDifference(originalChange, translationChange, new Rectangle(0, 36, 600, 36)) > 100, "Changing the unsung translation color repaints its current line immediately.");
+                            Check(PixelDifference(originalChange, translationChange, new Rectangle(0, 0, 600, 36)) == 0, "Changing translation colors preserves the original palette.");
+                        }
+                        Check((double)PrivateField(overlay, "_originalProgress") == .3 && (double)PrivateField(overlay, "_translationProgress") == .3, "Palette changes preserve paused karaoke progress.");
+                    }
+                    settings.KaraokeEnabled = false; settings.TextColor = "#EEAA66"; overlay.UpdateSettings(settings);
+                    using (Bitmap noKaraoke = CurrentBitmap(overlay, 600, 72))
+                    {
+                        settings.ActiveColor = "#22FF88"; overlay.UpdateSettings(settings);
+                        using (Bitmap newHighlight = CurrentBitmap(overlay, 600, 72)) Check(PixelDifference(noKaraoke, newHighlight, new Rectangle(0, 0, 600, 36)) == 0, "Disabling karaoke uses the original unsung color consistently.");
+                    }
+                }
+            }
+            foreach (string fontName in new[] { "Microsoft YaHei UI", "等线" })
+            using (LyricOverlay overlay = new LyricOverlay())
+            {
+                overlay.UpdateSettings(new AppSettings { OverlayEnabled = false, FontFamily = fontName, FontSize = 16, BoldLyrics = fontName == "Microsoft YaHei UI" });
+                using (Bitmap preview = overlay.RenderPreview(410, 48)) { CheckMargins(preview); SaveDark(preview, fontName == "等线" ? "overlay-font-light.png" : "overlay-font-clear.png"); }
+            }
+            using (var panel = new Panel { Width = 720, Height = 148, BackColor = Theme.Surface })
+            {
+                var progress = new DownloadProgress { Value = 64 }; progress.SetBounds(24, 30, 600, 20); panel.Controls.Add(progress);
+                var percent = Theme.Label("64%", 9, Theme.Accent); percent.SetBounds(634, 26, 60, 28); panel.Controls.Add(percent);
+                var action = Theme.Button("下载并安装", true); action.SetBounds(24, 80, 164, 40); panel.Controls.Add(action);
+                var disabled = Theme.Button("下载并安装", true); disabled.Enabled = false; disabled.SetBounds(205, 80, 164, 40); panel.Controls.Add(disabled);
+                using (var preview = new Bitmap(panel.Width, panel.Height)) { panel.DrawToBitmap(preview, panel.ClientRectangle); preview.Save("download-appearance.png", ImageFormat.Png); }
+            }
+            using (LyricOverlay overlay = new LyricOverlay())
+            {
+                overlay.UpdateSettings(new AppSettings { OverlayEnabled = false, KaraokeEnabled = true, LyricBrightness = 100,
+                    ActiveColor = "#FF4433", TextColor = "#5484D1", TranslationColor = "#44CC66", TranslationActiveColor = "#CC44CC" });
+                overlay.SetLyrics("Hello beautiful world", "", "你好，美丽的世界", true);
+                overlay.SetLineTiming("karaoke|0", 10, true);
+                using (Bitmap start = CurrentBitmap(overlay, 600, 72))
+                {
+                    overlay.SetKaraokeProgress(.5, .5);
+                    using (Bitmap middle = CurrentBitmap(overlay, 600, 72))
+                    {
+                        Check(PixelDifference(start, middle, new Rectangle(0, 0, 600, 36)) > 60 && PixelDifference(start, middle, new Rectangle(0, 36, 600, 36)) > 60, "Playback progress changes glyph colors in both languages.");
+                        overlay.SetLineTiming("karaoke|0", 5, false);
+                        using (Bitmap paused = CurrentBitmap(overlay, 600, 72)) Check(PixelDifference(middle, paused, new Rectangle(0, 0, 600, 72)) == 0, "Pausing retains the current karaoke colors.");
+                        overlay.SetKaraokeProgress(.2, .2);
+                        using (Bitmap seek = CurrentBitmap(overlay, 600, 72)) Check(PixelDifference(middle, seek, new Rectangle(0, 0, 600, 72)) > 100, "Backward seek repositions the sung area without changing captions.");
+                    }
+                }
+                using (Bitmap preview = overlay.RenderPreview(600, 72))
+                {
+                    int originalBase = 0, originalSung = 0, translatedBase = 0, translatedSung = 0;
+                    for (int y = 0; y < preview.Height; y++) for (int x = 0; x < preview.Width; x++)
+                    {
+                        Color pixel = preview.GetPixel(x, y); if (pixel.A < 220) continue;
+                        if (y < 36) { if (pixel.B > 170 && pixel.R < 120) originalBase++; if (pixel.R > 220 && pixel.G < 100) originalSung++; }
+                        else { if (pixel.G > 170 && pixel.R < 120) translatedBase++; if (pixel.R > 170 && pixel.B > 170 && pixel.G < 110) translatedSung++; }
+                    }
+                    Check(originalBase > 60 && originalSung > 60 && translatedBase > 60 && translatedSung > 60, "Original and translation render their independent unsung and sung colors.");
+                    CheckMargins(preview); SaveDark(preview, "overlay-karaoke-colors.png");
+                }
+            }
             using (LyricOverlay overlay = new LyricOverlay())
             {
                 overlay.UpdateSettings(new AppSettings { OverlayEnabled = false, FontFamily = "細明體-ExtB", FontSize = 19, ShowTranslation = true });

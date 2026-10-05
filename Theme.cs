@@ -13,10 +13,10 @@ namespace MusicBar
         public static readonly Color Input = Color.FromArgb(34, 38, 46);
         public static readonly Color Text = Color.FromArgb(241, 244, 248);
         public static readonly Color Muted = Color.FromArgb(159, 167, 183);
-        public static readonly Color Accent = Color.FromArgb(112, 231, 183);
+        public static readonly Color Accent = Color.FromArgb(124, 206, 255);
         public static readonly Color Border = Color.FromArgb(48, 53, 64);
         public static readonly Color Navigation = Color.FromArgb(20, 23, 28);
-        public static readonly Color AccentSurface = Color.FromArgb(29, 57, 49);
+        public static readonly Color AccentSurface = Color.FromArgb(29, 47, 65);
         public static Font Font(float size, FontStyle style) { return new Font("Microsoft YaHei UI", size, style); }
         public static Label Label(string text, float size, Color color)
         {
@@ -26,8 +26,8 @@ namespace MusicBar
         {
             var button = new RoundedButton { Text = text, FlatStyle = FlatStyle.Flat, BackColor = primary ? Accent : Input, ForeColor = primary ? Background : Text, Font = Font(10, FontStyle.Regular), Cursor = Cursors.Hand, Height = 38, UseVisualStyleBackColor = false, Margin = new Padding(0, 0, 10, 0) };
             button.FlatAppearance.BorderColor = primary ? Accent : Border;
-            button.FlatAppearance.MouseOverBackColor = primary ? Color.FromArgb(91, 239, 175) : Color.FromArgb(38, 53, 68);
-            button.FlatAppearance.MouseDownBackColor = primary ? Color.FromArgb(37, 189, 126) : Surface;
+            button.FlatAppearance.MouseOverBackColor = primary ? Color.FromArgb(155, 218, 255) : Color.FromArgb(38, 53, 68);
+            button.FlatAppearance.MouseDownBackColor = primary ? Color.FromArgb(93, 178, 229) : Surface;
             return button;
         }
         public static CheckBox Check(string text, bool value)
@@ -230,6 +230,8 @@ namespace MusicBar
         public bool NavigationButton;
         public bool Selected;
         public bool NotificationDot;
+        public bool ShowColorSample;
+        public Color ColorSample;
         public RoundedButton() { SetStyle(ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint, true); }
         protected override void OnMouseEnter(EventArgs e) { hover = true; Invalidate(); base.OnMouseEnter(e); }
         protected override void OnMouseLeave(EventArgs e) { hover = down = false; Invalidate(); base.OnMouseLeave(e); }
@@ -240,18 +242,77 @@ namespace MusicBar
             e.Graphics.Clear(Theme.ParentBackground(Parent));e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
             Color background = down ? FlatAppearance.MouseDownBackColor : hover ? FlatAppearance.MouseOverBackColor : BackColor;
             if (NavigationButton) background = Selected ? Theme.AccentSurface : hover ? Theme.Input : Theme.Navigation;
+            if (!Enabled) background = Theme.Surface;
             using (var path = Theme.RoundPath(new RectangleF(.5f, .5f, Math.Max(1, Width - 1), Math.Max(1, Height - 1)), 9))
             {
                 using (var brush = new SolidBrush(background)) e.Graphics.FillPath(brush, path);
-                if (!NavigationButton) using (var pen = new Pen(FlatAppearance.BorderColor)) e.Graphics.DrawPath(pen, path);
+                if (!NavigationButton) using (var pen = new Pen(Enabled ? FlatAppearance.BorderColor : Theme.Border)) e.Graphics.DrawPath(pen, path);
             }
             if (NavigationButton && Selected) using (var brush = new SolidBrush(Theme.Accent)) e.Graphics.FillRectangle(brush, 0, 12, 3, Math.Max(1, Height - 24));
             var bounds = new Rectangle(Padding.Left, Padding.Top, Math.Max(1, Width - Padding.Horizontal), Math.Max(1, Height - Padding.Vertical));
+            if (ShowColorSample)
+            {
+                float diameter = Math.Max(12, Height * .34f);
+                var sample = new RectangleF(12, (Height - diameter) / 2, diameter, diameter);
+                using (var brush = new SolidBrush(ColorSample)) e.Graphics.FillEllipse(brush, sample);
+                using (var pen = new Pen(Color.FromArgb(110, Theme.Text))) e.Graphics.DrawEllipse(pen, sample);
+                int inset = (int)(diameter + 20); bounds.X += inset; bounds.Width = Math.Max(1, bounds.Width - inset);
+            }
             TextFormatFlags flags = TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix;
             flags |= TextAlign == ContentAlignment.MiddleLeft ? TextFormatFlags.Left : TextFormatFlags.HorizontalCenter;
             TextRenderer.DrawText(e.Graphics, Text, Font, bounds, Enabled ? ForeColor : Theme.Muted, flags);
             if (NotificationDot) using (var brush = new SolidBrush(Color.FromArgb(255, 105, 105))) e.Graphics.FillEllipse(brush, Width - 14, 6, 7, 7);
             if (Focused && ShowFocusCues) ControlPaint.DrawFocusRectangle(e.Graphics, Rectangle.Inflate(ClientRectangle, -4, -4), ForeColor, background);
+        }
+    }
+    public sealed class DownloadProgress : Control
+    {
+        private readonly Timer animation = new Timer { Interval = 33 };
+        private int value;
+        private bool indeterminate;
+        private float phase;
+        public int Value
+        {
+            get { return value; }
+            set { this.value = Math.Max(0, Math.Min(100, value)); AccessibleDescription = this.value + "%"; Invalidate(); }
+        }
+        public bool Indeterminate
+        {
+            get { return indeterminate; }
+            set { indeterminate = value; UpdateAnimation(); Invalidate(); }
+        }
+        public DownloadProgress()
+        {
+            SetStyle(ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint, true);
+            AccessibleRole = AccessibleRole.ProgressBar; AccessibleName = "更新下载进度";
+            animation.Tick += delegate { phase = (phase + .018f) % 1; Invalidate(); };
+        }
+        private void UpdateAnimation() { if (Visible && indeterminate) animation.Start(); else animation.Stop(); }
+        protected override void OnVisibleChanged(EventArgs e) { base.OnVisibleChanged(e); UpdateAnimation(); }
+        protected override void OnPaintBackground(PaintEventArgs e) { e.Graphics.Clear(Theme.ParentBackground(Parent)); }
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            var track = new RectangleF(0, (Height - 8) / 2f, Width, 8);
+            using (var path = Theme.RoundPath(track, 4))
+            using (var brush = new SolidBrush(Theme.Input)) e.Graphics.FillPath(brush, path);
+            float fillWidth = indeterminate ? Width * .24f : Width * value / 100f;
+            if (fillWidth <= 0) return;
+            GraphicsState state = e.Graphics.Save();
+            try
+            {
+                using (var clip = Theme.RoundPath(track, 4)) e.Graphics.SetClip(clip);
+                float x = indeterminate ? (Width + fillWidth) * phase - fillWidth : 0;
+                var fill = new RectangleF(x, track.Top, fillWidth, track.Height);
+                using (var path = Theme.RoundPath(fill, 4))
+                using (var brush = new LinearGradientBrush(fill, Color.FromArgb(93, 164, 239), Theme.Accent, 0f)) e.Graphics.FillPath(brush, path);
+            }
+            finally { e.Graphics.Restore(state); }
+        }
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) { animation.Stop(); animation.Dispose(); }
+            base.Dispose(disposing);
         }
     }
     public sealed class SwitchCheckBox : CheckBox

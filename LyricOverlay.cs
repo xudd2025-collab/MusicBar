@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
+using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using System.Windows.Automation;
@@ -186,43 +187,49 @@ namespace MusicBar
             private float _width;
             private float _scale;
             private bool _scrolling;
+            private bool _bold;
             private SizeF _glyphSize;
+            private float[] _characterEdges;
 
-            internal void Prepare(string text, AppSettings settings, float pixels, RectangleF row, float scale, double now)
+            internal void Prepare(string text, AppSettings settings, float pixels, RectangleF row, float scale, double now, string fontName = null)
             {
-                bool reset = _text != text || _font != settings.FontFamily || _scrolling != settings.LongLineScroll;
-                bool rebuild = reset || Math.Abs(_pixels - pixels) > .01f || Math.Abs(_height - row.Height) > .01f
+                fontName = fontName ?? settings.FontFamily;
+                bool reset = _text != text || _font != fontName || _scrolling != settings.LongLineScroll;
+                bool weightChanged = _bold != settings.BoldLyrics;
+                bool rebuild = reset || weightChanged || Math.Abs(_pixels - pixels) > .01f || Math.Abs(_height - row.Height) > .01f
                     || Math.Abs(_scale - scale) > .01f || (!settings.LongLineScroll && Math.Abs(_width - row.Width) > .01f);
                 if (rebuild)
                 {
                     float previousGlyphWidth = _glyphSize.Width;
                     if (_path != null) { _path.Dispose(); _path = null; }
                     _text = text;
-                    _font = settings.FontFamily;
+                    _font = fontName;
                     _pixels = pixels;
                     _height = row.Height;
                     _width = row.Width;
                     _scale = scale;
                     _scrolling = settings.LongLineScroll;
+                    _bold = settings.BoldLyrics;
                     _glyphSize = SizeF.Empty;
-                    if (!string.IsNullOrEmpty(text)) BuildPath(text, settings.FontFamily, pixels, row, scale, settings.LongLineScroll);
+                    if (!string.IsNullOrEmpty(text)) BuildPath(text, fontName, pixels, row, scale, settings.LongLineScroll);
                     if (reset) Scroll.Reset(now);
                     else if (previousGlyphWidth > 0) Scroll.ScaleOffset(_glyphSize.Width / previousGlyphWidth);
                 }
-                float padding = Math.Max(1.5f, 2.8f * scale) / 2 + .5f;
+                float padding = Math.Max(1.2f, 2.0f * scale) / 2 + .5f;
                 double overflow = settings.LongLineScroll ? Math.Max(0, _glyphSize.Width - Math.Max(1, row.Width - padding * 2)) : 0;
                 Scroll.Configure(overflow, 40 * scale, now);
             }
 
             private void BuildPath(string text, string fontName, float pixels, RectangleF row, float scale, bool scrolling)
             {
+                fontName = ReadableFont(text, fontName, _bold);
                 FontFamily family;
                 try { family = new FontFamily(fontName); }
                 catch (ArgumentException) { family = new FontFamily("Segoe UI"); }
                 using (family)
                 using (StringFormat format = (StringFormat)StringFormat.GenericTypographic.Clone())
                 {
-                    FontStyle style = family.IsStyleAvailable(FontStyle.Regular) ? FontStyle.Regular
+                    FontStyle style = _bold && family.IsStyleAvailable(FontStyle.Bold) ? FontStyle.Bold : family.IsStyleAvailable(FontStyle.Regular) ? FontStyle.Regular
                         : family.IsStyleAvailable(FontStyle.Bold) ? FontStyle.Bold
                         : family.IsStyleAvailable(FontStyle.Italic) ? FontStyle.Italic : FontStyle.Bold | FontStyle.Italic;
                     format.FormatFlags |= StringFormatFlags.NoWrap | StringFormatFlags.MeasureTrailingSpaces;
@@ -232,11 +239,28 @@ namespace MusicBar
                         path.AddString(text, family, (int)style, pixels, PointF.Empty, format);
                         RectangleF glyphs = path.GetBounds();
                         if (glyphs.Width <= 0 || glyphs.Height <= 0) return;
-                        float padding = Math.Max(1.5f, 2.8f * scale) / 2 + .5f;
+                        float padding = Math.Max(1.2f, 2.0f * scale) / 2 + .5f;
                         float fit = Math.Min(1, Math.Max(1, row.Height - padding * 2) / glyphs.Height);
                         if (!scrolling) fit = Math.Min(fit, Math.Max(1, row.Width - padding * 2) / glyphs.Width);
                         using (Matrix normalize = new Matrix(fit, 0, 0, fit, -glyphs.Left * fit, -glyphs.Top * fit)) path.Transform(normalize);
                         _glyphSize = path.GetBounds().Size;
+                        _characterEdges = new float[text.Length + 1];
+                        using (var bitmap = new Bitmap(1, 1))
+                        using (var measure = Graphics.FromImage(bitmap))
+                        using (var font = new Font(family, pixels, style, GraphicsUnit.Pixel))
+                        {
+                            var elements = StringInfo.GetTextElementEnumerator(text);
+                            float advance = 0;
+                            while (elements.MoveNext())
+                            {
+                                string element = elements.GetTextElement();
+                                float width = measure.MeasureString(element, font, PointF.Empty, format).Width;
+                                int at = elements.ElementIndex;
+                                for (int n = 1; n <= element.Length; n++) _characterEdges[at + n] = advance + width * n / element.Length;
+                                advance += width;
+                            }
+                            if (advance > 0) for (int n = 0; n < _characterEdges.Length; n++) _characterEdges[n] *= _glyphSize.Width / advance;
+                        }
                         _path = path;
                         path = null;
                     }
@@ -244,10 +268,42 @@ namespace MusicBar
                 }
             }
 
-            internal void Draw(Graphics graphics, Color color, RectangleF row, float scale, AppSettings settings, bool stationary)
+            // Explicitly use a readable Chinese family when the chosen Latin font
+            // has no CJK glyphs, instead of GDI+'s opaque default-font fallback.
+            private static string ReadableFont(string text, string fontName, bool bold)
+            {
+                if (fontName == "Microsoft YaHei UI" || fontName == "等线") return fontName;
+                string cjk = "";
+                foreach (char character in text) if (character >= '\u2e80' && character <= '\u9fff') cjk += character;
+                if (cjk.Length == 0) return fontName;
+                IntPtr dc = IntPtr.Zero, nativeFont = IntPtr.Zero, previous = IntPtr.Zero;
+                try
+                {
+                    using (var family = new FontFamily(fontName))
+                    using (var font = new Font(family, 16, bold && family.IsStyleAvailable(FontStyle.Bold) ? FontStyle.Bold : FontStyle.Regular))
+                    {
+                        dc = OverlayNative.CreateCompatibleDC(IntPtr.Zero);
+                        if (dc == IntPtr.Zero) return "Microsoft YaHei UI";
+                        nativeFont = font.ToHfont(); previous = OverlayNative.SelectObject(dc, nativeFont);
+                        var glyphs = new ushort[cjk.Length];
+                        if (OverlayNative.GetGlyphIndices(dc, cjk, cjk.Length, glyphs, 1) == uint.MaxValue) return "Microsoft YaHei UI";
+                        foreach (ushort glyph in glyphs) if (glyph == 0xffff || glyph == 0) return "Microsoft YaHei UI";
+                    }
+                    return fontName;
+                }
+                catch (ArgumentException) { return "Microsoft YaHei UI"; }
+                finally
+                {
+                    if (previous != IntPtr.Zero && dc != IntPtr.Zero) OverlayNative.SelectObject(dc, previous);
+                    if (nativeFont != IntPtr.Zero) OverlayNative.DeleteObject(nativeFont);
+                    if (dc != IntPtr.Zero) OverlayNative.DeleteDC(dc);
+                }
+            }
+
+            internal void Draw(Graphics graphics, Color color, Color sungColor, double progress, RectangleF row, float scale, AppSettings settings, bool stationary)
             {
                 if (_path == null) return;
-                float outlineWidth = Math.Max(1.5f, 2.8f * scale);
+                float outlineWidth = Math.Max(1.2f, 2.0f * scale);
                 float padding = outlineWidth / 2 + .5f;
                 float y = row.Top + (row.Height - _glyphSize.Height) / 2;
                 if (settings.FollowTaskbar)
@@ -265,6 +321,15 @@ namespace MusicBar
                         outline.LineJoin = LineJoin.Round;
                         graphics.DrawPath(outline, _path);
                         graphics.FillPath(fill, _path);
+                    if (progress > 0)
+                    {
+                        double character = Math.Min(1, progress) * _text.Length;
+                        int index = Math.Min(_text.Length - 1, (int)character);
+                        float edge = _characterEdges == null ? (float)(_glyphSize.Width * Math.Min(1, progress))
+                            : _characterEdges[index] + (float)(character - index) * (_characterEdges[index + 1] - _characterEdges[index]);
+                        graphics.SetClip(new RectangleF(-padding, -padding, edge + padding, _glyphSize.Height + padding * 2), CombineMode.Intersect);
+                        using (var sung = new SolidBrush(sungColor)) graphics.FillPath(sung, _path);
+                    }
                     }
                 }
                 finally { graphics.Restore(saved); }
@@ -300,6 +365,7 @@ namespace MusicBar
         private string _current = "";
         private string _next = "";
         private string _translation = "";
+        private double _originalProgress, _translationProgress;
         private string _lineKey = "";
         private double _lineDeadline = double.NaN;
         private bool _playing = true;
@@ -389,10 +455,15 @@ namespace MusicBar
             copy.FollowTaskbar = settings.FollowTaskbar;
             copy.PreviewEnabled = settings.PreviewEnabled;
             copy.FontFamily = settings.FontFamily;
+            copy.TranslationFontFamily = settings.TranslationFontFamily;
             copy.FontSize = float.IsNaN(settings.FontSize) || float.IsInfinity(settings.FontSize) ? 14 : settings.FontSize;
             copy.LyricBrightness = settings.LyricBrightness;
             copy.TextColor = settings.TextColor;
             copy.ActiveColor = settings.ActiveColor;
+            copy.TranslationColor = settings.TranslationColor;
+            copy.TranslationActiveColor = settings.TranslationActiveColor;
+            copy.KaraokeEnabled = settings.KaraokeEnabled;
+            copy.BoldLyrics = settings.BoldLyrics;
             copy.Width = settings.Width;
             copy.HorizontalOffset = settings.HorizontalOffset;
             copy.VerticalOffset = settings.VerticalOffset;
@@ -499,6 +570,19 @@ namespace MusicBar
         public void ResetScroll()
         {
             OnUi(delegate { ResetScrolling(); _dirty = true; RefreshOverlay(); });
+        }
+
+        public void SetKaraokeProgress(double original, double translation)
+        {
+            original = double.IsNaN(original) || double.IsInfinity(original) ? 0 : Math.Max(0, Math.Min(1, original));
+            translation = double.IsNaN(translation) || double.IsInfinity(translation) ? 0 : Math.Max(0, Math.Min(1, translation));
+            OnUi(delegate
+            {
+                if (Math.Abs(_originalProgress - original) < .0005 && Math.Abs(_translationProgress - translation) < .0005) return;
+                _originalProgress = original; _translationProgress = translation;
+                _dirty = true;
+                if (!_preview && Visible && _lastLayout != null) PaintLayout(_lastLayout);
+            });
         }
 
         public void SetPreview(bool enabled)
@@ -671,7 +755,10 @@ namespace MusicBar
                 && left.ShowTranslation == right.ShowTranslation && left.LongLineScroll == right.LongLineScroll
                 && left.ClickThrough == right.ClickThrough && left.FollowTaskbar == right.FollowTaskbar
                 && left.PreviewEnabled == right.PreviewEnabled && left.FontFamily == right.FontFamily
+                && left.TranslationFontFamily == right.TranslationFontFamily
                 && left.FontSize == right.FontSize && left.LyricBrightness == right.LyricBrightness && left.TextColor == right.TextColor && left.ActiveColor == right.ActiveColor
+                && left.TranslationColor == right.TranslationColor && left.TranslationActiveColor == right.TranslationActiveColor
+                && left.KaraokeEnabled == right.KaraokeEnabled && left.BoldLyrics == right.BoldLyrics
                 && left.Width == right.Width && left.HorizontalOffset == right.HorizontalOffset
                 && left.VerticalOffset == right.VerticalOffset && left.MonitorIndex == right.MonitorIndex && left.Alignment == right.Alignment;
         }
@@ -826,13 +913,18 @@ namespace MusicBar
                 RectangleF firstRow = new RectangleF(leftMargin, verticalMargin, Math.Max(1, width - leftMargin - margin), rowHeight);
                 first.Prepare(current, _settings, pixels, firstRow, scale, now);
                 if (!stationary) first.Scroll.Advance(now, deadline);
-                first.Draw(graphics, _settings.Brightened(_settings.Highlight), firstRow, scale, _settings, stationary);
+                bool karaoke = _settings.KaraokeEnabled && (preview || _lineKey.Length > 0);
+                double originalProgress = karaoke ? (preview ? .45 : _originalProgress) : 0;
+                first.Draw(graphics, _settings.Brightened(_settings.Foreground), _settings.Brightened(_settings.Highlight), originalProgress, firstRow, scale, _settings, stationary);
                 if (lines == 2)
                 {
                     RectangleF secondRow = new RectangleF(leftMargin, verticalMargin + rowHeight + rowGap, Math.Max(1, width - leftMargin - margin), rowHeight);
-                    second.Prepare(next, _settings, pixels, secondRow, scale, now);
+                    bool translated = _settings.ShowTranslation && (preview || !string.IsNullOrWhiteSpace(_translation));
+                    string secondFont = translated && _settings.TranslationFontFamily.Length > 0 ? _settings.TranslationFontFamily : _settings.FontFamily;
+                    second.Prepare(next, _settings, pixels, secondRow, scale, now, secondFont);
                     if (!stationary) second.Scroll.Advance(now, deadline);
-                    second.Draw(graphics, Color.FromArgb(235, _settings.Brightened(_settings.Foreground)), secondRow, scale, _settings, stationary);
+                    double translatedProgress = karaoke && translated ? (preview ? .45 : _translationProgress) : 0;
+                    second.Draw(graphics, _settings.Brightened(translated ? _settings.TranslationForeground : _settings.Foreground), _settings.Brightened(_settings.TranslationHighlight), translatedProgress, secondRow, scale, _settings, stationary);
                 }
             }
             }

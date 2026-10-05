@@ -22,6 +22,8 @@ namespace MusicBar
         private string _lastManagerError = "";
         private volatile bool _disposed;
         private readonly NetEaseBridgeReader _netease = new NetEaseBridgeReader();
+        private MusicSnapshot _lastNetEase;
+        private DateTime _lastNetEaseUtc;
 
         public async Task<MusicSnapshot> ReadAsync(bool qqEnabled, bool neteaseEnabled, MusicPlayer preferredPlayer)
         {
@@ -74,6 +76,8 @@ namespace MusicBar
         {
             _lifetime.Token.ThrowIfCancellationRequested();
             MusicSnapshot netease = neteaseEnabled ? await _netease.ReadAsync(_lifetime.Token).ConfigureAwait(false) : null;
+            if (netease != null) { _lastNetEase = netease; _lastNetEaseUtc = DateTime.UtcNow; }
+            else if (!neteaseEnabled) _lastNetEase = null;
             if (_manager == null && DateTime.UtcNow >= _managerRetryUtc)
             {
                 try
@@ -173,6 +177,11 @@ namespace MusicBar
                         catch { snapshot.HasTimeline = false; }
                         snapshot.Status = (snapshot.IsPlaying ? "播放中 · " : "已暂停 · ") + MusicSnapshot.PlayerName(snapshot.Player);
                         if (!snapshot.HasTimeline) snapshot.Status += " · 播放器未提供歌曲进度";
+                        if (snapshot.Player == MusicPlayer.NetEase)
+                        {
+                            snapshot = RetainNetEaseIdentity(snapshot, _lastNetEase, _lastNetEaseUtc, DateTime.UtcNow);
+                            if (!snapshot.HasTimeline) snapshot.Status += " · 请在常规设置修复网易云启动方式";
+                        }
                         return snapshot;
                     }
                     catch (OperationCanceledException) { throw; }
@@ -189,6 +198,26 @@ namespace MusicBar
                 _lastManagerError = ShortMessage(ex);
                 return netease ?? Waiting(qqEnabled, neteaseEnabled, _lastManagerError);
             }
+        }
+
+        internal static MusicSnapshot RetainNetEaseIdentity(MusicSnapshot observed, MusicSnapshot cached, DateTime receivedUtc, DateTime now)
+        {
+            // Brief bridge interruptions must not replace the recording ID/album
+            // with incomplete SMTC metadata and cancel an otherwise valid lookup.
+            // Freeze the last position, respect pause, and discard it after 2s or
+            // as soon as the public metadata identifies another recording.
+            if (observed == null || observed.Player != MusicPlayer.NetEase || observed.HasTimeline || cached == null ||
+                cached.Player != MusicPlayer.NetEase || !cached.HasTimeline || now < receivedUtc || now - receivedUtc > TimeSpan.FromSeconds(2) ||
+                !string.Equals(observed.Title, cached.Title, StringComparison.Ordinal) ||
+                (!string.IsNullOrEmpty(observed.Artist) && !string.Equals(observed.Artist, cached.Artist, StringComparison.Ordinal) && !cached.Artist.StartsWith(observed.Artist + " / ", StringComparison.Ordinal)) ||
+                (!string.IsNullOrEmpty(observed.Album) && observed.Album != cached.Album) ||
+                (!string.IsNullOrEmpty(observed.PlatformTrackId) && observed.PlatformTrackId != cached.PlatformTrackId)) return observed;
+            MusicSnapshot retained = cached.Copy();
+            retained.PositionSeconds = cached.PositionSeconds;
+            retained.InterpolateTimeline = false;
+            retained.IsPlaying = observed.IsPlaying;
+            retained.Status = "网易云接入暂时重连 · 等待新的真实进度";
+            return retained;
         }
 
         private static PlaybackClock ReadPlaybackClock(GlobalSystemMediaTransportControlsSession session)

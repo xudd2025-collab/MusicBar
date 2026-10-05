@@ -41,8 +41,32 @@ internal static class NetEaseBridgeChecks
         Check(NetEaseBridgeReader.IsPlayerPage("orpheus://orpheus/pub/app.html"),"current installed app page accepted");
         Check(!NetEaseBridgeReader.IsPlayerPage("https://music.163.com/"),"web pages refused");
         VerifyProgressClock(now);
+        VerifyBridgeInterruption(now);
+        VerifyLaunchArguments();
         VerifyDirectLyrics().GetAwaiter().GetResult();
         Console.WriteLine("NetEase bridge checks passed: "+passed);
+    }
+    static void VerifyBridgeInterruption(DateTime now)
+    {
+        var cached=Snapshot(43,now);var smtc=cached.Copy();smtc.HasTimeline=false;smtc.Album="";smtc.PlatformTrackId="";smtc.DurationSeconds=0;
+        var retained=MusicSessionReader.RetainNetEaseIdentity(smtc,cached,now,now.AddMilliseconds(800));
+        Check(retained.PlaybackKey==cached.PlaybackKey&&retained.HasTimeline&&!retained.InterpolateTimeline&&retained.CurrentPosition==43,"Short bridge interruption preserves the native ID and freezes position");
+        smtc.IsPlaying=false;retained=MusicSessionReader.RetainNetEaseIdentity(smtc,cached,now,now.AddSeconds(1));
+        Check(!retained.IsPlaying&&!retained.InterpolateTimeline&&cached.IsPlaying,"SMTC pause is respected without modifying the cached sample");
+        Check(MusicSessionReader.RetainNetEaseIdentity(smtc,cached,now,now.AddSeconds(3))==smtc,"An old bridge sample expires instead of simulating playback");
+        foreach(int change in new[]{0,1,2,3}) {
+            var other=smtc.Copy();if(change==0)other.Title="Other";if(change==1)other.Artist="Other";if(change==2)other.Album="Other";if(change==3)other.PlatformTrackId="456";
+            Check(MusicSessionReader.RetainNetEaseIdentity(other,cached,now,now.AddMilliseconds(200))==other,"Contradictory recording identity discards cached bridge metadata: "+change);
+        }
+        var qq=smtc.Copy();qq.Player=MusicPlayer.QQMusic;
+        Check(MusicSessionReader.RetainNetEaseIdentity(qq,cached,now,now)==qq,"NetEase fallback cannot alter a QQ snapshot");
+    }
+    static void VerifyLaunchArguments()
+    {
+        string args=NetEaseLaunchIntegration.MergeArguments("--autostart --remote-debugging-port=9999 --remote-debugging-address=0.0.0.0");
+        Check(args=="--autostart "+NetEaseLaunchIntegration.Arguments,"Stable launcher replaces old debug arguments, preserves other options and restricts to loopback");
+        Check(NetEaseLaunchIntegration.MergeArguments(args)==args,"Repeated shortcut repair does not duplicate arguments");
+        Check(NetEaseLaunchIntegration.MergeArguments("--remote-debugging-port 9999 --remote-debugging-address \"localhost\" --another \"a b\"")=="--another \"a b\" "+NetEaseLaunchIntegration.Arguments,"Space-separated old options and quoted unrelated arguments are preserved");
     }
 
     static MusicSnapshot Snapshot(double position, DateTime at, string state="Playing")

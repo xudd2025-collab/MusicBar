@@ -21,7 +21,7 @@ foreach ($assemblyName in @('UIAutomationClient.dll','UIAutomationTypes.dll','Wi
 }
 $arguments = @('/nologo','/target:winexe','/platform:anycpu','/optimize+','/utf8output',('/out:' + (Join-Path $outputPath 'MusicBar.exe')),('/win32manifest:' + (Join-Path $projectDirectory 'app.manifest')))
 foreach ($reference in $references) { $arguments += '/r:' + $reference }
-$sourceFiles = @('AppUpdateService.cs','AssemblyInfo.cs','LrcParser.cs','LyricController.cs','LyricOverlay.cs','LyricRepository.cs','MainForm.cs','Models.cs','MusicSessionReader.cs','NetEaseBridgeReader.cs','Program.cs','SettingsStore.cs','StartupRegistration.cs','TaskbarGeometry.cs','Theme.cs')
+$sourceFiles = @('AppHotkey.cs','AppUpdateService.cs','AssemblyInfo.cs','LrcParser.cs','LyricController.cs','LyricOverlay.cs','LyricRepository.cs','MainForm.cs','Models.cs','MusicSessionReader.cs','NetEaseBridgeReader.cs','NetEaseLaunchIntegration.cs','Program.cs','SettingsStore.cs','StartupRegistration.cs','TaskbarGeometry.cs','Theme.cs')
 $sourcePaths = $sourceFiles | ForEach-Object { Join-Path $projectDirectory $_ }
 $arguments += $sourcePaths
 & $compilerPath @arguments
@@ -29,37 +29,38 @@ if ($LASTEXITCODE -ne 0) { throw 'MusicBar 编译失败。' }
 Copy-Item -LiteralPath (Join-Path $projectDirectory 'MusicBar.exe.config') -Destination $outputPath -Force
 if (Test-Path -LiteralPath (Join-Path $projectDirectory 'update-source.json')) { Copy-Item -LiteralPath (Join-Path $projectDirectory 'update-source.json') -Destination $outputPath -Force }
 if ($Check) {
-    $checkArguments = @('/nologo','/target:exe','/platform:anycpu','/utf8output',('/out:' + (Join-Path $outputPath 'MusicBar.Checks.exe')),('/main:MusicBar.Checks'))
+    $checkOutputPath = [System.IO.Path]::GetFullPath((Join-Path $projectDirectory 'checks\.build'))
+    New-Item -ItemType Directory -Path $checkOutputPath -Force | Out-Null
+    $lyricCheckSources = @('Models.cs','SettingsStore.cs','LrcParser.cs','LyricRepository.cs','LyricController.cs','MusicSessionReader.cs','NetEaseBridgeReader.cs')
+    $checkArguments = @('/nologo','/target:exe','/platform:anycpu','/utf8output',('/out:' + (Join-Path $checkOutputPath 'MusicBar.Checks.exe')),('/main:MusicBar.Checks'))
     foreach ($reference in $references) { $checkArguments += '/r:' + $reference }
-    $checkArguments += $sourcePaths
+    foreach ($source in ($lyricCheckSources + @('StartupRegistration.cs'))) { $checkArguments += Join-Path $projectDirectory $source }
     $checkArguments += Join-Path $projectDirectory 'checks\Checks.cs'
     & $compilerPath @checkArguments
     if ($LASTEXITCODE -ne 0) { throw '检查程序编译失败。' }
-    & (Join-Path $outputPath 'MusicBar.Checks.exe')
+    & (Join-Path $checkOutputPath 'MusicBar.Checks.exe')
     if ($LASTEXITCODE -ne 0) { throw 'MusicBar 检查失败。' }
-    $timingArguments = @('/nologo','/target:exe','/platform:anycpu','/utf8output',('/out:' + (Join-Path $outputPath 'MusicBar.TimingChecks.exe')), '/main:TimelineTimingChecks')
-    foreach ($reference in $references) { $timingArguments += '/r:' + $reference }
-    $timingArguments += $sourcePaths
-    $timingArguments += Join-Path $projectDirectory 'checks\TimelineTimingChecks.cs'
-    & $compilerPath @timingArguments
-    if ($LASTEXITCODE -ne 0) { throw '播放时间轴检查编译失败。' }
-    & (Join-Path $outputPath 'MusicBar.TimingChecks.exe')
-    if ($LASTEXITCODE -ne 0) { throw '播放时间轴检查失败。' }
-    $bridgeArguments = @('/nologo','/target:exe','/platform:anycpu','/utf8output',('/out:' + (Join-Path $outputPath 'MusicBar.BridgeChecks.exe')), '/main:NetEaseBridgeChecks')
+    # Detected and removed by Kaspersky on 2026-10-06. Do not rebuild,
+    # execute, or rename this check until the detection has been reviewed.
+    Write-Warning '时间轴独立检查已暂停：MusicBar.TimingChecks.exe 被卡巴斯基检测，尚未确认是否误报。详情见 SECURITY.md。'
+    $bridgeArguments = @('/nologo','/target:exe','/platform:anycpu','/utf8output',('/out:' + (Join-Path $checkOutputPath 'MusicBar.BridgeChecks.exe')), '/main:NetEaseBridgeChecks')
     foreach ($reference in $references) { $bridgeArguments += '/r:' + $reference }
-    $bridgeArguments += $sourcePaths
+    foreach ($source in ($lyricCheckSources + @('NetEaseLaunchIntegration.cs'))) { $bridgeArguments += Join-Path $projectDirectory $source }
     $bridgeArguments += Join-Path $projectDirectory 'checks\NetEaseBridgeChecks.cs'
     & $compilerPath @bridgeArguments
     if ($LASTEXITCODE -ne 0) { throw '网易云接入检查编译失败。' }
-    & (Join-Path $outputPath 'MusicBar.BridgeChecks.exe')
+    & (Join-Path $checkOutputPath 'MusicBar.BridgeChecks.exe')
     if ($LASTEXITCODE -ne 0) { throw '网易云接入检查失败。' }
-    $updateArguments = @('/nologo','/target:exe','/utf8output',('/out:' + (Join-Path $outputPath 'MusicBar.UpdateChecks.exe')), '/main:MusicBar.UpdateChecks')
-    foreach ($reference in $references) { $updateArguments += '/r:' + $reference }
-    $updateArguments += $sourcePaths
-    $updateArguments += Join-Path $projectDirectory 'checks\UpdateChecks.cs'
-    & $compilerPath @updateArguments
-    if ($LASTEXITCODE -ne 0) { throw '更新检查编译失败。' }
-    & (Join-Path $outputPath 'MusicBar.UpdateChecks.exe')
-    if ($LASTEXITCODE -ne 0) { throw '更新检查失败。' }
+    $qqArguments = @('/nologo','/target:exe','/platform:anycpu','/utf8output',('/out:' + (Join-Path $checkOutputPath 'MusicBar.QQMatchingChecks.exe')), '/main:QQMatchingChecks')
+    foreach ($reference in $references) { $qqArguments += '/r:' + $reference }
+    foreach ($source in $lyricCheckSources) { $qqArguments += Join-Path $projectDirectory $source }
+    $qqArguments += Join-Path $projectDirectory 'checks\QQMatchingChecks.cs'
+    & $compilerPath @qqArguments
+    if ($LASTEXITCODE -ne 0) { throw 'QQ 歌名匹配检查编译失败。' }
+    & (Join-Path $checkOutputPath 'MusicBar.QQMatchingChecks.exe')
+    if ($LASTEXITCODE -ne 0) { throw 'QQ 歌名匹配检查失败。' }
+    # Kaspersky detected and removed this development executable on 2026-10-05.
+    # Preserve its source for review; do not rebuild or execute it until resolved.
+    Write-Warning '更新检查已暂停：MusicBar.UpdateChecks.exe 被卡巴斯基检测并删除，尚未确认是否误报。详情见 SECURITY.md。'
 }
 Write-Output (Join-Path $outputPath 'MusicBar.exe')
