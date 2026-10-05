@@ -1,15 +1,15 @@
 {
-  "version": "1.0.11",
-  "notes": "- 网易云优先按播放器的歌曲 ID 读取歌词和译文，跳过歌名搜索。\r\n- 同名不同版本切歌时，按歌曲 ID 清除旧歌词并重新加载。\r\n- 缩短播放信息轮询间隔；网易云每秒进度样本之间使用有上限的平滑，重复样本不会累加时间。\r\n- 快句缩短开头停留；拖动进度或迟到的歌词时限可以调整剩余滚动，换句前显示结尾。\r\n- 保留暂停、单次滚动、任务栏边界及现有设置。",
-  "release_url": "https://github.com/xudd2025-collab/MusicBar/releases/tag/v1.0.11",
+  "version": "1.0.20",
+  "notes": "- 本次发布包含 1.0.12 至 1.0.19 的全部修复与功能改进，升级保留现有设置和缓存。\n- 译文字体可跟随原文或单独选择；清晰雅黑、轻盈等线两款推荐风格同时应用于原文和译文。\n- 检查所选字体的中文字形；Mistral 等西文字体缺少中文时采用清晰雅黑，避免译文无提示地使用系统默认字体。\n- 改译文字体会立即重画当前句，保留原文绘制、颜色和演唱进度；保留 1.0.19 的外观与下载并安装流程改进。",
+  "release_url": "https://github.com/xudd2025-collab/MusicBar/releases/tag/v1.0.20",
   "installer": {
-    "name": "MusicBar-Setup-1.0.11.exe",
-    "sha256": "319aff48250b07273e17360a2be8d26e6f1b203187e6888cb04aeb6411fa1b18",
+    "name": "MusicBar-Setup-1.0.20.exe",
+    "sha256": "92e5224ee23b0878bf974fc3e3873fa18d8d5fa5cda02ea8c008c67b9e6eb5d0",
     "urls": [
-      "https://github.com/xudd2025-collab/MusicBar/releases/download/v1.0.11/MusicBar-Setup-1.0.11.exe",
-      "https://raw.githubusercontent.com/xudd2025-collab/MusicBar/updates/releases/v1.0.11/MusicBar-Setup-1.0.11.exe",
-      "https://cdn.jsdelivr.net/gh/xudd2025-collab/MusicBar@updates/releases/v1.0.11/MusicBar-Setup-1.0.11.exe",
-      "https://fastly.jsdelivr.net/gh/xudd2025-collab/MusicBar@updates/releases/v1.0.11/MusicBar-Setup-1.0.11.exe"
+      "https://github.com/xudd2025-collab/MusicBar/releases/download/v1.0.20/MusicBar-Setup-1.0.20.exe",
+      "https://raw.githubusercontent.com/xudd2025-collab/MusicBar/updates/releases/v1.0.20/MusicBar-Setup-1.0.20.exe",
+      "https://cdn.jsdelivr.net/gh/xudd2025-collab/MusicBar@updates/releases/v1.0.20/MusicBar-Setup-1.0.20.exe",
+      "https://fastly.jsdelivr.net/gh/xudd2025-collab/MusicBar@updates/releases/v1.0.20/MusicBar-Setup-1.0.20.exe"
     ]
   }
 }
