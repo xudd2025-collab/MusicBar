@@ -58,7 +58,7 @@ namespace MusicBar
                     polling = true;
                     try { await PollAsync(); }
                     catch (Exception ex) { Message = "读取播放器失败：" + ex.Message; Notify(); }
-                    finally { polling = false; nextPoll = DateTime.UtcNow.AddMilliseconds(350); }
+                    finally { polling = false; nextPoll = DateTime.UtcNow.AddMilliseconds(Snapshot.Player == MusicPlayer.NetEase ? 100 : 250); }
                 }
             };
         }
@@ -97,9 +97,9 @@ namespace MusicBar
             Snapshot = latest ?? new MusicSnapshot();
             if (Snapshot.HasTrack)
             {
-                if (trackKey != Snapshot.TrackKey)
+                if (trackKey != Snapshot.PlaybackKey)
                 {
-                    trackKey = Snapshot.TrackKey;
+                    trackKey = Snapshot.PlaybackKey;
                     ManualMode = false;
                     ManualPlaying = false;
                     Document = null;
@@ -144,7 +144,7 @@ namespace MusicBar
         {
             CancelRequest();
             nextLyricRetryUtc = DateTime.MaxValue;
-            var saved = Store.LoadOverride(trackKey);
+            var saved = Store.LoadOverride(Snapshot.TrackKey);
             if (saved != null)
             {
                 LrcParser.EnsureTranslation(saved);
@@ -167,7 +167,7 @@ namespace MusicBar
             try
             {
                 LyricDocument document = await Repository.FindAsync(requestedTrack, request.Token);
-                if (disposed || request.IsCancellationRequested || requestedRevision != revision || requestedTrack.TrackKey != trackKey) return;
+                if (disposed || request.IsCancellationRequested || requestedRevision != revision || requestedTrack.PlaybackKey != trackKey) return;
                 if (document != null) LrcParser.EnsureTranslation(document);
                 Document = document;
                 Message = document == null ? "未找到可靠匹配，请搜索选择歌词或导入 LRC。" : document.HasTimedLyrics ? "歌词已连接 · " + document.Source : string.IsNullOrWhiteSpace(document.PlainText) ? document.Source + "，可导入本地 LRC。" : "这首歌没有逐行时间标记，可导入带时间轴的 LRC。";

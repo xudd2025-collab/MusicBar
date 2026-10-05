@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing version tag (v1.0.10)
+        description: Existing version tag (v1.0.11)
         required: true
 permissions:
   contents: write

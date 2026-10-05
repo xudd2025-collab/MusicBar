@@ -22,6 +22,7 @@ namespace MusicBar
         private bool _firstPass = true;
         private double _speed = 40;
         private double _firstPassSpeed;
+        private double _finishAt = double.NaN;
         private double _startedAt;
         private double _initialHold = StartHoldSeconds;
         internal double Offset { get; private set; }
@@ -36,6 +37,7 @@ namespace MusicBar
             _phaseElapsed = 0;
             _firstPass = true;
             _firstPassSpeed = 0;
+            _finishAt = double.NaN;
             _startedAt = now;
             _initialHold = StartHoldSeconds;
             LastTime = now;
@@ -96,11 +98,8 @@ namespace MusicBar
                         _firstPassSpeed = _speed;
                         if (!double.IsNaN(deadline) && !double.IsInfinity(deadline))
                         {
-                            // Choose this line's traversal speed once. Player-clock corrections
-                            // must not make an in-progress sentence accelerate every frame.
-                            double tailHold = Math.Min(EndHoldSeconds, Math.Max(0, deadline - _startedAt) * .4);
-                            double minimumTravel = Math.Min(.12, Math.Max(.001, (deadline - at) * .35));
-                            _firstPassSpeed = Math.Max(_speed, distance / Math.Max(minimumTravel, deadline - at - tailHold));
+                            _finishAt = TailStart(deadline);
+                            _firstPassSpeed = Math.Max(_speed, distance / Math.Max(.001, _finishAt - at));
                         }
                     }
                     double speed = _firstPassSpeed;
@@ -120,10 +119,30 @@ namespace MusicBar
 
         internal void UpdateDeadline(double deadline)
         {
-            if (!_firstPass || _phase != 0) return;
+            if (!_firstPass || double.IsNaN(deadline) || double.IsInfinity(deadline)) return;
             double duration = deadline - _startedAt;
-            _initialHold = !double.IsNaN(duration) && !double.IsInfinity(duration) && duration < .75
-                ? Math.Max(0, duration * .15) : StartHoldSeconds;
+            if (_phase == 0)
+            {
+                // Short sentences spend more of their available time actually moving.
+                _initialHold = Math.Min(StartHoldSeconds, Math.Max(0, duration) * .15);
+                return;
+            }
+            double finish = TailStart(deadline);
+            if (_phase == 1 && _firstPassSpeed > 0 &&
+                (double.IsNaN(_finishAt) || finish < _finishAt - .04))
+            {
+                // A native seek or a newly available deadline can shorten this line.
+                // Fit the remaining distance to that absolute target; never multiply
+                // speed each tick or extend the traversal on repeated notifications.
+                _finishAt = finish;
+                _firstPassSpeed = Math.Max(_firstPassSpeed,
+                    Math.Max(0, MaximumOffset - Offset) / Math.Max(.001, finish - LastTime));
+            }
+        }
+
+        private double TailStart(double deadline)
+        {
+            return deadline - Math.Min(EndHoldSeconds, Math.Max(0, deadline - _startedAt) * .4);
         }
 
         internal double NextWakeSeconds

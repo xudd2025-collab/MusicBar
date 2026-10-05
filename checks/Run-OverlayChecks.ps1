@@ -1,4 +1,4 @@
-param([switch]$RenderOnly)
+param([switch]$RenderOnly, [switch]$AnimationOnly)
 $ErrorActionPreference = 'Stop'
 $projectDirectory = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $compilerDirectory = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319'
@@ -27,6 +27,7 @@ if ($LASTEXITCODE -ne 0) { throw '歌词浮层检查程序编译失败。' }
 Push-Location -LiteralPath $outputDirectory
 try {
     if ($RenderOnly) { & $executablePath '--render-only' }
+    elseif ($AnimationOnly) { & $executablePath '--animation-only' }
     else { & $executablePath }
     if ($LASTEXITCODE -ne 0) { throw '歌词浮层检查失败。' }
 } finally { Pop-Location }

@@ -17,7 +17,8 @@ namespace MusicBar
             try
             {
                 bool renderOnly = Array.IndexOf(arguments, "--render-only") >= 0;
-                Run(!renderOnly);
+                bool animationOnly = Array.IndexOf(arguments, "--animation-only") >= 0;
+                Run(!renderOnly && !animationOnly, !renderOnly);
                 Console.WriteLine("Overlay geometry / alpha rendering: " + _checks + " checks passed.");
                 return 0;
             }
@@ -28,7 +29,7 @@ namespace MusicBar
             }
         }
 
-        internal static void Run(bool includeMouseChecks = true)
+        internal static void Run(bool includeMouseChecks = true, bool includeAnimationChecks = true)
         {
             AppSettings settings = new AppSettings();
             TaskbarSnapshot bar = BottomBar(1920, 1080, 48, 1);
@@ -99,13 +100,13 @@ namespace MusicBar
             VerifyPreview();
             VerifyScrollState();
             VerifyLongLineRendering();
+            if (includeAnimationChecks) VerifyAnimationScheduler();
             if (includeMouseChecks)
             {
-                VerifyAnimationScheduler();
                 VerifyMouseGestures();
                 VerifyNativeCursorPolling();
             }
-            else Console.WriteLine("Native mouse checks omitted by --render-only.");
+            else Console.WriteLine("Native mouse checks omitted.");
         }
 
         private static void VerifyScrollState()
@@ -146,9 +147,18 @@ namespace MusicBar
             state.Advance(1, 10);
             Check(Math.Abs(state.Offset - 20) < .01, "An ordinary line must begin scrolling at its chosen speed.");
             state.Advance(1.5, 5);
-            Check(Math.Abs(state.Offset - 40) < .01, "A corrected player deadline must not accelerate a sentence already moving.");
+            Check(state.Offset > 40 && state.Offset < 200, "An earlier native deadline fits the remaining words into the shorter line.");
             state.Advance(2, 3);
-            Check(Math.Abs(state.Offset - 60) < .01, "Repeated deadline corrections must not accumulate faster scrolling.");
+            Check(state.Offset == 200, "A forward seek must reveal the tail before the corrected line ends.");
+            state.Advance(2.1, 3);
+            Check(state.Offset == 200 && !state.IsMoving, "Repeated corrected deadlines do not restart completed scrolling.");
+            state.Reset(0); state.Configure(200, 40, 0); state.Advance(1, 5);
+            double firstOffset = state.Offset;
+            for(int i=1;i<=10;i++) state.Advance(1+i*.1,5+i*.1);
+            Check(Math.Abs(state.Offset-firstOffset*3)<.01, "Repeated later notifications cannot accumulate faster scrolling.");
+            state.Reset(0); state.Configure(200, 40, 0); state.Advance(1,double.NaN);
+            state.Advance(1.2,2);
+            Check(state.Offset==200,"A deadline arriving after movement begins still fits the full tail.");
             state.Reset(0);
             state.Configure(1000, 40, 0);
             for (double tick = .033; tick < .67; tick += .033) state.Advance(tick, 1);
@@ -179,7 +189,7 @@ namespace MusicBar
                 Timer timer = (Timer)PrivateField(overlay, "_animationTimer");
                 int ticks = 0;
                 timer.Tick += delegate { ticks++; };
-                Check(timer.Enabled && timer.Interval >= 400, "A visible long lyric must schedule its initial hold without 30fps repainting.");
+                Check(timer.Enabled && timer.Interval >= 160 && timer.Interval <= 300, "A short timed lyric reduces its initial hold without 30fps repainting.");
                 System.Diagnostics.Stopwatch clock = System.Diagnostics.Stopwatch.StartNew();
                 double nextNotification = 0;
                 while (clock.Elapsed.TotalSeconds < 1.05)

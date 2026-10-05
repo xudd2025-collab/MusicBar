@@ -614,7 +614,7 @@ namespace MusicBar
         private void UpdateOverlay()
         {
             overlay.SetPreview(controller.Settings.PreviewEnabled);
-            string lineKey = controller.Settings.PreviewEnabled ? "preview" : controller.Snapshot.TrackKey + "|" + controller.CurrentLineIndex;
+            string lineKey = controller.Settings.PreviewEnabled ? "preview" : controller.Snapshot.PlaybackKey + "|" + controller.CurrentLineIndex;
             overlay.SetLineTiming(lineKey, controller.RemainingLineSeconds > 0 ? controller.RemainingLineSeconds : double.NaN,
                 controller.Settings.PreviewEnabled || (controller.ManualMode ? controller.ManualPlaying : controller.Snapshot.IsPlaying));
             overlay.SetLyrics(controller.Current, controller.Next, controller.CurrentTranslation, controller.ShouldDisplay);

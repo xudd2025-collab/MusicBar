@@ -32,9 +32,13 @@ $installerName = "MusicBar-Setup-$version.exe"
 $installerPath = Join-Path $distPath $installerName
 $installerHash = (Get-FileHash -LiteralPath $installerPath -Algorithm SHA256).Hash.ToLowerInvariant()
 $baseUrl = "https://github.com/$repository/releases/download/v$version"
+$releaseNotes = '查看发布页面了解本次更新内容。'
+$changelog = Get-Content -LiteralPath (Join-Path $projectDirectory 'CHANGELOG.md') -Raw
+$section = [regex]::Match($changelog, '(?ms)^##\s+' + [regex]::Escape($version) + '[^\r\n]*\r?\n(?<notes>.*?)(?=^##\s|\z)')
+if ($section.Success -and $section.Groups['notes'].Value.Trim().Length -gt 0) { $releaseNotes = $section.Groups['notes'].Value.Trim() }
 $manifest = [ordered]@{
     version = $version
-    notes = '新增版本显示、更新提示点及自动检查；支持备用下载线路和 SHA-256 校验。'
+    notes = $releaseNotes
     release_url = "https://github.com/$repository/releases/tag/v$version"
     installer = [ordered]@{
         name = $installerName

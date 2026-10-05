@@ -14,22 +14,35 @@ namespace MusicBar
         public string Title = "";
         public string Artist = "";
         public string Album = "";
+        public string PlatformTrackId = "";
         public double PositionSeconds;
         public double DurationSeconds;
         public bool IsPlaying;
         public bool HasTimeline;
         public bool InterpolateTimeline = true;
+        public double MaximumInterpolationSeconds = double.PositiveInfinity;
         public double PlaybackRate = 1;
         public DateTime TimestampUtc = DateTime.UtcNow;
         public string Status = "";
         public string LiveLyric = "";
         public string TrackKey { get { return Player.ToString() + "|" + Title.Trim() + "|" + Artist.Trim() + "|" + Album.Trim(); } }
+        // Keep TrackKey compatible with existing local lyric bindings. Playback identity
+        // also includes the native ID so different recordings with identical names switch.
+        public string PlaybackKey { get { return TrackKey + (string.IsNullOrEmpty(PlatformTrackId) ? "" : "|id:" + PlatformTrackId); } }
+        internal static bool ValidNetEaseTrackId(string id)
+        {
+            long number;
+            if (string.IsNullOrEmpty(id) || id.Length > 19) return false;
+            foreach (char c in id) if (c < '0' || c > '9') return false;
+            return long.TryParse(id, NumberStyles.None, CultureInfo.InvariantCulture, out number) && number > 0;
+        }
         public bool HasTrack { get { return Player != MusicPlayer.None && !string.IsNullOrWhiteSpace(Title); } }
         public double CurrentPosition
         {
             get
             {
                 double elapsed = IsPlaying && HasTimeline && InterpolateTimeline ? Math.Max(0, (DateTime.UtcNow - TimestampUtc).TotalSeconds) : 0;
+                elapsed = Math.Min(elapsed, Math.Max(0, MaximumInterpolationSeconds));
                 double position = Math.Max(0, PositionSeconds + elapsed * PlaybackRate);
                 return DurationSeconds > 0 ? Math.Min(DurationSeconds, position) : position;
             }

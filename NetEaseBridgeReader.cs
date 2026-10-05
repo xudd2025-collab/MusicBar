@@ -21,6 +21,7 @@ namespace MusicBar
         internal const string ReadExpression = "(async()=>{if(!window.channel||!window.channel.deData)return null;const raw=localStorage.getItem('playingInfo'),last=localStorage.getItem('lastPlaying');if(!raw||!last)return null;const p=JSON.parse(await window.channel.deData(raw)),q=JSON.parse(await window.channel.deData(last));const b=document.querySelector('[aria-label=\"播放进度调节\"]'),i=b&&b.querySelector('input[type=\"range\"]');if(!i||raw!==localStorage.getItem('playingInfo')||String(p.resourceTrackId)!==String(q.trackId))return null;const position=Number(i.value),duration=Number(i.max);if(Math.abs(duration-Number(p.resourceDuration))>.001||Math.abs(duration-Number(q.resourceDuration))>.001)return null;const state=({'2':'Playing','1':'Pause','0':'Stop','-1':'End'})[String(p.playingState)];const track=p.curTrack||p.curVoice||{};return {id:String(p.resourceTrackId||''),title:p.resourceName,artist:(p.resourceArtists||[]).map(x=>typeof x==='string'?x:x.name).join(' / '),album:track.album&&track.album.name||'',position,duration,state};})()";
         private readonly HttpClient http;
         private readonly JavaScriptSerializer json = new JavaScriptSerializer { MaxJsonLength = 262144 };
+        private readonly NetEaseProgressClock progressClock = new NetEaseProgressClock();
         private ClientWebSocket socket;
         private int commandId;
         private DateTime retryUtc;
@@ -100,7 +101,7 @@ namespace MusicBar
                 var result = Child(message, "result");
                 if (result == null || result.ContainsKey("exceptionDetails")) return null;
                 var remote = Child(result, "result");
-                return ParseSample(remote == null ? null : Child(remote, "value"), DateTime.UtcNow);
+                return progressClock.Observe(ParseSample(remote == null ? null : Child(remote, "value"), DateTime.UtcNow));
             }
             return null;
         }
@@ -108,14 +109,15 @@ namespace MusicBar
         internal static MusicSnapshot ParseSample(IDictionary<string, object> sample, DateTime capturedUtc)
         {
             if (sample == null) return null;
-            string title = Text(sample, "title").Trim(), state = Text(sample, "state");
+            string title = Text(sample, "title").Trim(), state = Text(sample, "state"), trackId = Text(sample, "id");
             double position = Number(sample, "position"), duration = Number(sample, "duration");
-            if (title.Length == 0 || Text(sample, "id").Length == 0 || !Finite(position) || !Finite(duration) ||
+            if (title.Length == 0 || !MusicSnapshot.ValidNetEaseTrackId(trackId) || !Finite(position) || !Finite(duration) ||
                 position < 0 || duration <= 0 || position > duration + 1 || duration > 86400 ||
                 (state != "Playing" && state != "Pause" && state != "Stop" && state != "End")) return null;
             return new MusicSnapshot
             {
                 Player = MusicPlayer.NetEase, Title = title, Artist = Text(sample, "artist").Trim(), Album = Text(sample, "album").Trim(),
+                PlatformTrackId = trackId,
                 PositionSeconds = Math.Min(position, duration), DurationSeconds = duration,
                 IsPlaying = state == "Playing", HasTimeline = true, InterpolateTimeline = false,
                 TimestampUtc = capturedUtc, Status = (state == "Playing" ? "播放中" : "已暂停") + " · 网易云音乐 · 本机真实进度"
@@ -172,7 +174,47 @@ namespace MusicBar
             finally { Marshal.FreeHGlobal(data); }
             return false;
         }
-        private void Reset() { var old = socket; socket = null; if (old != null) old.Dispose(); }
+        private void Reset() { progressClock.Reset(); var old = socket; socket = null; if (old != null) old.Dispose(); }
         public void Dispose() { disposed = true; Reset(); http.Dispose(); }
+    }
+
+    // The UI publishes roughly one native progress value per second. Smooth only
+    // after observing a normal advancing pair, and cap prediction to one sample.
+    // Duplicate polls retain the original anchor; no time is added cumulatively.
+    internal sealed class NetEaseProgressClock
+    {
+        private MusicSnapshot anchor;
+        private bool smoothing;
+        private double limit;
+        internal void Reset() { anchor = null; smoothing = false; }
+
+        internal MusicSnapshot Observe(MusicSnapshot sample)
+        {
+            if (sample == null) { Reset(); return null; }
+            bool compatible = anchor != null && anchor.PlaybackKey == sample.PlaybackKey &&
+                Math.Abs(anchor.DurationSeconds - sample.DurationSeconds) < .001 &&
+                anchor.IsPlaying && sample.IsPlaying;
+            if (!compatible)
+            {
+                anchor = sample;
+                smoothing = false;
+                return sample;
+            }
+            if (Math.Abs(sample.PositionSeconds - anchor.PositionSeconds) > .001)
+            {
+                double step = sample.PositionSeconds - anchor.PositionSeconds;
+                double elapsed = (sample.TimestampUtc - anchor.TimestampUtc).TotalSeconds;
+                smoothing = step >= .35 && step <= 1.6 && elapsed >= .25 && elapsed <= 1.8 && Math.Abs(step - elapsed) <= .45;
+                limit = Math.Min(1.2, Math.Max(.5, step + .15));
+                anchor = sample;
+            }
+            if (smoothing)
+            {
+                sample.TimestampUtc = anchor.TimestampUtc;
+                sample.InterpolateTimeline = true;
+                sample.MaximumInterpolationSeconds = limit;
+            }
+            return sample;
+        }
     }
 }

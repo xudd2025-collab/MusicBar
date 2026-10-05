@@ -259,6 +259,14 @@ namespace MusicBar
             CheckDisposed();
             token.ThrowIfCancellationRequested();
             if (song == null || !song.HasTrack) return null;
+            // The local player supplies the exact recording ID. Fetch that ID (and its
+            // cache) immediately instead of searching titles or using an older match.
+            if (song.Player == MusicPlayer.NetEase && MusicSnapshot.ValidNetEaseTrackId(song.PlatformTrackId))
+                return await FetchAsync(new LyricSearchResult
+                {
+                    Player = song.Player, Id = song.PlatformTrackId, Title = song.Title,
+                    Artist = song.Artist, Album = song.Album, DurationSeconds = song.DurationSeconds
+                }, token).ConfigureAwait(false);
             if (string.IsNullOrWhiteSpace(song.Artist) &&
                 (string.IsNullOrWhiteSpace(song.Album) || song.DurationSeconds <= 0))
                 return null;
