@@ -126,6 +126,12 @@ namespace MusicBar
         }
         public static Icon CreateIcon()
         {
+            // Use the same multi-size artwork as Explorer, shortcuts and Setup.
+            using (var stream = typeof(Theme).Assembly.GetManifestResourceStream("MusicBar.AppIcon.ico"))
+            {
+                if (stream != null)
+                    using (var icon = new Icon(stream, 32, 32)) return (Icon)icon.Clone();
+            }
             using (var bitmap = new Bitmap(32, 32))
             {
                 using (var g = Graphics.FromImage(bitmap))

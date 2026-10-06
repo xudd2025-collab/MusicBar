@@ -1,5 +1,6 @@
 using System;
 using System.Runtime.InteropServices;
+using System.Windows.Forms;
 
 namespace MusicBar
 {
@@ -8,13 +9,29 @@ namespace MusicBar
         internal const int Id = 0x4D42;
         private IntPtr window;
         internal bool Registered { get; private set; }
-        internal bool Register(IntPtr handle, int preset)
+        internal bool Register(IntPtr handle, int modifiers, int key)
         {
+            if (!AppSettings.ValidHotkey(key, modifiers)) return false;
             Dispose();
-            uint modifiers = preset == 1 ? 2u | 4u : preset == 2 ? 1u | 4u : 1u | 2u;
-            Registered = RegisterHotKey(handle, Id, modifiers | 0x4000u, 0x4Du);
+            Registered = RegisterHotKey(handle, Id, (uint)modifiers | 0x4000u, (uint)key);
             if (Registered) window = handle;
             return Registered;
+        }
+        internal static string Describe(int key, int modifiers)
+        {
+            string name = key >= 0x30 && key <= 0x39 ? ((char)key).ToString() : ((Keys)key).ToString();
+            switch (key)
+            {
+                case 0xBA: name = ";"; break; case 0xBB: name = "+"; break;
+                case 0xBC: name = ","; break; case 0xBD: name = "-"; break;
+                case 0xBE: name = "."; break; case 0xBF: name = "/"; break;
+                case 0xC0: name = "`"; break; case 0xDB: name = "["; break;
+                case 0xDC: name = "\\"; break; case 0xDD: name = "]"; break;
+                case 0xDE: name = "'"; break;
+            }
+            return ((modifiers & 2) != 0 ? "Ctrl + " : "") +
+                ((modifiers & 1) != 0 ? "Alt + " : "") +
+                ((modifiers & 4) != 0 ? "Shift + " : "") + name;
         }
         public void Dispose()
         {

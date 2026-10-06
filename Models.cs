@@ -148,6 +148,9 @@ namespace MusicBar
         [DataMember] public bool HideTaskbarIcon = false;
         [DataMember] public bool EnableHotkey = true;
         [DataMember] public int HotkeyPreset = 0;
+        [DataMember] public bool UseCustomHotkey = false;
+        [DataMember] public int HotkeyKey = 0x4D;
+        [DataMember] public int HotkeyModifiers = 3;
         [DataMember] public int Width = 420;
         [DataMember] public int HorizontalOffset = 0;
         [DataMember] public int VerticalOffset = 0;
@@ -172,6 +175,8 @@ namespace MusicBar
             KaraokeEnabled = true;
             BoldLyrics = true;
             EnableHotkey = true;
+            HotkeyKey = 0x4D;
+            HotkeyModifiers = 3;
         }
 
         public void Normalize()
@@ -194,6 +199,26 @@ namespace MusicBar
             if (!ValidColor(TranslationColor)) TranslationColor = TextColor;
             if (!ValidColor(TranslationActiveColor)) TranslationActiveColor = ActiveColor;
             HotkeyPreset = Math.Max(0, Math.Min(2, HotkeyPreset));
+            if (!ValidHotkey(HotkeyKey, HotkeyModifiers))
+            {
+                UseCustomHotkey = false;
+                HotkeyKey = 0x4D;
+                HotkeyModifiers = 3;
+            }
+        }
+        public int EffectiveHotkeyKey { get { return UseCustomHotkey ? HotkeyKey : 0x4D; } }
+        public int EffectiveHotkeyModifiers { get { return UseCustomHotkey ? HotkeyModifiers : HotkeyPreset == 1 ? 6 : HotkeyPreset == 2 ? 5 : 3; } }
+        public static bool ValidHotkey(int key, int modifiers)
+        {
+            // Function keys work alone; text keys still need Ctrl or Alt.
+            if ((modifiers & ~7) != 0) return false;
+            bool functionKey = key >= 0x70 && key <= 0x87;
+            if ((modifiers & 3) == 0 && !functionKey) return false;
+            return key >= 0x30 && key <= 0x39 || key >= 0x41 && key <= 0x5A ||
+                key >= 0x60 && key <= 0x87 || key >= 0xBA && key <= 0xC0 ||
+                key >= 0xDB && key <= 0xDF || key == 0xE2 ||
+                key == 8 || key == 9 || key == 13 || key == 27 ||
+                key >= 32 && key <= 40 || key == 45 || key == 46;
         }
         public static bool ValidColor(string value)
         {

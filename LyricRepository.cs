@@ -473,6 +473,7 @@ namespace MusicBar
             if (!haveArtist && (!haveDuration || album.Length == 0)) return null;
             List<LyricSearchResult> matching = new List<LyricSearchResult>();
             HashSet<string> displayIdentityMatches = new HashSet<string>(StringComparer.Ordinal);
+            HashSet<string> providerDurationMatches = new HashSet<string>(StringComparer.Ordinal);
             List<LyricSearchResult> leadingArtistMatches = new List<LyricSearchResult>();
             List<LyricSearchResult> displayArtistMatches = new List<LyricSearchResult>();
             bool allowLeadingArtist = song.Player == MusicPlayer.QQMusic && haveArtist && artist.IndexOf('|') < 0
@@ -491,7 +492,18 @@ namespace MusicBar
                     // Durations may be rounded to whole seconds by QQ or the media session.
                     double tolerance = Math.Min(4.0, Math.Max(2.0, song.DurationSeconds * 0.01));
                     if (candidate.DurationSeconds <= 0 || double.IsNaN(candidate.DurationSeconds) || double.IsInfinity(candidate.DurationSeconds) ||
-                        Math.Abs(candidate.DurationSeconds - song.DurationSeconds) > tolerance) continue;
+                        double.IsNaN(song.DurationSeconds) || double.IsInfinity(song.DurationSeconds)) continue;
+                    double difference = Math.Abs(candidate.DurationSeconds - song.DurationSeconds);
+                    if (difference > tolerance)
+                    {
+                        // Catalogs can differ by a few seconds of leading/trailing audio.
+                        // Only a QQ alternative with exact title, all artists and album
+                        // may use this allowance; aliases and ambiguous recordings cannot.
+                        if (!qqDisplayNames || song.Player != MusicPlayer.NetEase || !fullIdentity ||
+                            !exactTitle || Normalize(candidate.Album) != album ||
+                            ArtistSignature(candidate.Artist) != artist || difference > 4.0) continue;
+                        providerDurationMatches.Add(candidate.Id);
+                    }
                 }
                 if (haveArtist && ArtistSignature(candidate.Artist) != artist)
                 {
@@ -523,6 +535,7 @@ namespace MusicBar
                 if (sameAlbum.Count > 0) matching = sameAlbum;
             }
             if (matching.Count == 1) return matching[0];
+            if (matching.Exists(delegate(LyricSearchResult candidate) { return providerDurationMatches.Contains(candidate.Id); })) return null;
             // Display compensation requires one recording; a slightly closer
             // duration cannot resolve several translated names or album aliases.
             if (matching.Exists(delegate(LyricSearchResult candidate) { return displayIdentityMatches.Contains(candidate.Id); })) return null;

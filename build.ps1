@@ -19,7 +19,9 @@ foreach ($assemblyName in @('UIAutomationClient.dll','UIAutomationTypes.dll','Wi
     if (-not (Test-Path -LiteralPath $assemblyPath)) { throw "缺少 $assemblyName" }
     $references += $assemblyPath
 }
-$arguments = @('/nologo','/target:winexe','/platform:anycpu','/optimize+','/utf8output',('/out:' + (Join-Path $outputPath 'MusicBar.exe')),('/win32manifest:' + (Join-Path $projectDirectory 'app.manifest')))
+$iconPath = Join-Path $projectDirectory 'assets\MusicBar.ico'
+if (-not (Test-Path -LiteralPath $iconPath)) { throw '缺少 assets\MusicBar.ico，无法构建应用图标。' }
+$arguments = @('/nologo','/target:winexe','/platform:anycpu','/optimize+','/utf8output',('/out:' + (Join-Path $outputPath 'MusicBar.exe')),('/win32manifest:' + (Join-Path $projectDirectory 'app.manifest')),('/win32icon:' + $iconPath),('/resource:' + $iconPath + ',MusicBar.AppIcon.ico'))
 foreach ($reference in $references) { $arguments += '/r:' + $reference }
 $sourceFiles = @('AppHotkey.cs','AppUpdateService.cs','AssemblyInfo.cs','LrcParser.cs','LyricController.cs','LyricOverlay.cs','LyricRepository.cs','MainForm.cs','Models.cs','MusicSessionReader.cs','NetEaseBridgeReader.cs','NetEaseLaunchIntegration.cs','Program.cs','SettingsStore.cs','StartupRegistration.cs','TaskbarGeometry.cs','Theme.cs')
 $sourcePaths = $sourceFiles | ForEach-Object { Join-Path $projectDirectory $_ }
@@ -27,6 +29,7 @@ $arguments += $sourcePaths
 & $compilerPath @arguments
 if ($LASTEXITCODE -ne 0) { throw 'MusicBar 编译失败。' }
 Copy-Item -LiteralPath (Join-Path $projectDirectory 'MusicBar.exe.config') -Destination $outputPath -Force
+Copy-Item -LiteralPath $iconPath -Destination (Join-Path $outputPath 'MusicBar.ico') -Force
 if (Test-Path -LiteralPath (Join-Path $projectDirectory 'update-source.json')) { Copy-Item -LiteralPath (Join-Path $projectDirectory 'update-source.json') -Destination $outputPath -Force }
 if ($Check) {
     $checkOutputPath = [System.IO.Path]::GetFullPath((Join-Path $projectDirectory 'checks\.build'))

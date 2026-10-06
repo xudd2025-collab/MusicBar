@@ -30,6 +30,10 @@ namespace MusicBar
         public bool Searching;
         public bool QQRunning;
         public bool NetEaseRunning;
+        public bool NeedsNetEaseIntegration
+        {
+            get { return Snapshot.Player == MusicPlayer.NetEase && Snapshot.HasTrack && !Snapshot.HasTimeline; }
+        }
         private double manualPosition;
         private DateTime manualAt = DateTime.UtcNow;
         private readonly System.Windows.Forms.Timer ticker;
@@ -198,6 +202,11 @@ namespace MusicBar
             if (!Settings.OnlineLyrics)
             {
                 Message = "在线歌词已关闭，可在「歌词管理」导入 LRC。"; Notify(); return;
+            }
+            if (NeedsNetEaseIntegration && !MusicSnapshot.ValidNetEaseTrackId(Snapshot.PlatformTrackId))
+            {
+                Message = "网易云当前只提供歌名，尚未接入播放进度。请点「修复并启动接入」；退出网易云后，MusicBar 会自动重新接入。";
+                UpdateLine(); Notify(); return;
             }
             int requestedRevision = revision;
             var request = new CancellationTokenSource();

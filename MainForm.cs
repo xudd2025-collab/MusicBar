@@ -20,7 +20,11 @@ namespace MusicBar
         private readonly List<Button> navigation = new List<Button>();
         private Label headerStatus, footerStatus, songTitle, songArtist, liveLine, liveTranslation, connectionHint, qqStatus, neteaseStatus, lyricStatus, manualStatus;
         private Label positionLabel;
-        private Button previewButton, manualButton, usePlayerButton, dragButton;
+        private Button previewButton, manualButton, usePlayerButton, dragButton, neteaseLaunchButton;
+        private readonly System.Windows.Forms.Timer neteaseStartTimer = new System.Windows.Forms.Timer { Interval = 500 };
+        private string pendingNetEasePath = "", neteaseRecoveryStatus = "";
+        private DateTime neteaseStartDeadline;
+        private bool verifyingNetEaseStart;
         private CheckBox qqSwitch, neteaseSwitch, overlaySwitch, onlineSwitch, positionLock;
         private ComboBox preferred, lyricSource, positionAlignment;
         private TextBox query;
@@ -30,6 +34,8 @@ namespace MusicBar
         private NumericUpDown horizontalPosition, verticalPosition;
         private PictureBox previewImage;
         private CancellationTokenSource searchRequest;
+        private CancellationTokenSource lyricStatusRequest;
+        private string displayedControllerMessage = "", displayedStatusTrackKey = "";
         private string resultsTrackKey = "";
         private bool updating = true;
         private bool exiting;
@@ -110,6 +116,7 @@ namespace MusicBar
             updateTimer.Tick += async delegate { if (controller.Settings.AutoCheckUpdates && !updateBusy && DateTime.UtcNow >= nextUpdateCheck) await CheckForUpdates(); };
             NetworkChange.NetworkAvailabilityChanged += NetworkAvailabilityChanged;
             updateTimer.Start();
+            neteaseStartTimer.Tick += CompleteNetEaseStart;
         }
 
         protected override void OnHandleCreated(EventArgs e)
@@ -132,9 +139,26 @@ namespace MusicBar
         {
             bool enabled = controller.Settings.EnableHotkey;
             bool success = false;
-            if (enabled && IsHandleCreated) success = appHotkey.Register(Handle, controller.Settings.HotkeyPreset);
+            if (enabled && IsHandleCreated) success = appHotkey.Register(Handle, controller.Settings.EffectiveHotkeyModifiers, controller.Settings.EffectiveHotkeyKey);
             else appHotkey.Dispose();
-            if (hotkeyHint != null) hotkeyHint.Text = !enabled ? "快捷键已关闭，可双击托盘图标打开。" : success ? "在其他软件中也可按此快捷键打开 MusicBar。" : "快捷键未注册，可能已被其他软件占用；请选择另一组合。";
+            if (hotkeyHint != null) hotkeyHint.Text = !enabled ? "快捷键已关闭，可双击托盘图标打开。" : success ? "在其他软件中也可按 " + AppHotkey.Describe(controller.Settings.EffectiveHotkeyKey, controller.Settings.EffectiveHotkeyModifiers) + " 打开 MusicBar。\n点击按键框可录入 F1 等单个功能键或组合键。" : "快捷键未注册，可能已被系统或其他软件占用；请设置另一组合。";
+        }
+        private bool SaveHotkey(bool custom, int key, int modifiers)
+        {
+            if (!AppSettings.ValidHotkey(key, modifiers)) return false;
+            if (controller.Settings.EnableHotkey && IsHandleCreated && !appHotkey.Register(Handle, modifiers, key))
+            {
+                UpdateHotkey();
+                hotkeyHint.Text = "该组合键被系统或其他软件占用，未保存。原快捷键已保留，请换一个组合。";
+                return false;
+            }
+            controller.Settings.UseCustomHotkey = custom;
+            controller.Settings.HotkeyKey = key;
+            controller.Settings.HotkeyModifiers = modifiers;
+            if (!custom) controller.Settings.HotkeyPreset = 0;
+            UpdateHotkey();
+            if (!controller.Store.Save(controller.Settings)) hotkeyHint.Text = controller.Store.LastError;
+            return true;
         }
 
         private void BuildInterface()
@@ -245,6 +269,7 @@ namespace MusicBar
             status = Theme.Label("●  检测中", 9, Theme.Muted); status.SetBounds(72, 49, 240, 25); status.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right; card.Controls.Add(status);
             toggle = Theme.Check("启用插件", player == MusicPlayer.QQMusic ? controller.Settings.QQEnabled : controller.Settings.NetEaseEnabled); toggle.Location = new Point(20, 101); card.Controls.Add(toggle);
             var open = Theme.Button(player == MusicPlayer.NetEase ? "启动网易云接入" : "打开播放器", false); open.SetBounds(180, 95, 125, 34); open.Anchor = AnchorStyles.Top | AnchorStyles.Right; open.Click += delegate { LaunchPlayer(player); }; card.Controls.Add(open);
+            if (player == MusicPlayer.NetEase) neteaseLaunchButton = open;
             return card;
         }
         private void BuildSettings()
@@ -471,10 +496,66 @@ namespace MusicBar
             var hiddenIcon = Theme.Check("隐藏任务栏应用图标", controller.Settings.HideTaskbarIcon); hiddenIcon.Location = new Point(24, 18); access.Controls.Add(hiddenIcon);
             hiddenIcon.CheckedChanged += delegate { if (!updating) { controller.Settings.HideTaskbarIcon = hiddenIcon.Checked; ShowInTaskbar = !hiddenIcon.Checked; controller.Store.Save(controller.Settings); } };
             var hotkeyEnabled = Theme.Check("使用快捷键打开 MusicBar", controller.Settings.EnableHotkey); hotkeyEnabled.Location = new Point(24, 66); access.Controls.Add(hotkeyEnabled);
-            var hotkeyChoice = Theme.Combo(); hotkeyChoice.Items.AddRange(new object[] { "Ctrl + Alt + M", "Ctrl + Shift + M", "Alt + Shift + M" }); hotkeyChoice.SelectedIndex = controller.Settings.HotkeyPreset; hotkeyChoice.SetBounds(24, 112, 270, 32); access.Controls.Add(hotkeyChoice);
+            var hotkeyInput = new TextBox { ReadOnly = true, BackColor = Theme.Input, ForeColor = Theme.Text, Font = Theme.Font(10, FontStyle.Regular), BorderStyle = BorderStyle.FixedSingle, AccessibleName = "打开 MusicBar 的快捷键" };
+            hotkeyInput.Text = AppHotkey.Describe(controller.Settings.EffectiveHotkeyKey, controller.Settings.EffectiveHotkeyModifiers);
+            hotkeyInput.SetBounds(24, 112, 270, 32); access.Controls.Add(hotkeyInput);
+            var saveHotkey = Theme.Button("保存快捷键", false); saveHotkey.SetBounds(306, 109, 125, 36); saveHotkey.Enabled = false; access.Controls.Add(saveHotkey);
+            var resetHotkey = Theme.Button("恢复默认", false); resetHotkey.SetBounds(443, 109, 110, 36); access.Controls.Add(resetHotkey);
             hotkeyHint = Theme.Label("", 9, Theme.Muted); hotkeyHint.SetBounds(24, 160, 700, 48); access.Controls.Add(hotkeyHint);
+            int pendingKey = controller.Settings.EffectiveHotkeyKey, pendingModifiers = controller.Settings.EffectiveHotkeyModifiers;
+            bool recordingHotkey = false;
+            Action startRecording = delegate
+            {
+                recordingHotkey = true; saveHotkey.Enabled = false; appHotkey.Dispose();
+                hotkeyInput.Text = "请按下快捷键…";
+                hotkeyHint.Text = "可直接按 F1、F2 等功能键，或按 Ctrl / Alt 加其他键。\n录入后点击「保存快捷键」，Esc 取消。";
+            };
+            hotkeyInput.Enter += delegate { if (!updating) startRecording(); };
+            hotkeyInput.Click += delegate { if (!recordingHotkey) startRecording(); };
+            hotkeyInput.KeyDown += delegate(object sender, KeyEventArgs e)
+            {
+                if (!recordingHotkey) return;
+                e.SuppressKeyPress = true;
+                if (e.KeyCode == Keys.ControlKey || e.KeyCode == Keys.ShiftKey || e.KeyCode == Keys.Menu) return;
+                if (e.KeyCode == Keys.Escape && e.Modifiers == Keys.None)
+                {
+                    recordingHotkey = false; saveHotkey.Enabled = false;
+                    hotkeyInput.Text = AppHotkey.Describe(controller.Settings.EffectiveHotkeyKey, controller.Settings.EffectiveHotkeyModifiers); UpdateHotkey(); return;
+                }
+                int modifiers = (e.Control ? 2 : 0) | (e.Alt ? 1 : 0) | (e.Shift ? 4 : 0);
+                if (!AppSettings.ValidHotkey((int)e.KeyCode, modifiers))
+                {
+                    saveHotkey.Enabled = false; hotkeyHint.Text = "请直接按功能键，或用 Ctrl / Alt 搭配其他键。Esc 可取消。"; return;
+                }
+                pendingKey = (int)e.KeyCode; pendingModifiers = modifiers;
+                hotkeyInput.Text = AppHotkey.Describe(pendingKey, pendingModifiers); saveHotkey.Enabled = true;
+                hotkeyHint.Text = "已录入 " + hotkeyInput.Text + "，点击「保存快捷键」应用。";
+            };
+            hotkeyInput.Leave += delegate
+            {
+                recordingHotkey = false; UpdateHotkey();
+                if (saveHotkey.Enabled) hotkeyHint.Text = "已录入 " + hotkeyInput.Text + "，点击「保存快捷键」应用。";
+                else hotkeyInput.Text = AppHotkey.Describe(controller.Settings.EffectiveHotkeyKey, controller.Settings.EffectiveHotkeyModifiers);
+            };
+            Deactivate += delegate
+            {
+                if (!recordingHotkey) return;
+                recordingHotkey = false; UpdateHotkey();
+                if (!saveHotkey.Enabled) hotkeyInput.Text = AppHotkey.Describe(controller.Settings.EffectiveHotkeyKey, controller.Settings.EffectiveHotkeyModifiers);
+            };
+            saveHotkey.Click += delegate
+            {
+                if (!SaveHotkey(true, pendingKey, pendingModifiers)) return;
+                recordingHotkey = false; saveHotkey.Enabled = false;
+                hotkeyInput.Text = AppHotkey.Describe(controller.Settings.EffectiveHotkeyKey, controller.Settings.EffectiveHotkeyModifiers);
+            };
+            resetHotkey.Click += delegate
+            {
+                if (!SaveHotkey(false, 0x4D, 3)) return;
+                recordingHotkey = false; saveHotkey.Enabled = false;
+                hotkeyInput.Text = AppHotkey.Describe(controller.Settings.EffectiveHotkeyKey, controller.Settings.EffectiveHotkeyModifiers);
+            };
             hotkeyEnabled.CheckedChanged += delegate { if (!updating) { controller.Settings.EnableHotkey = hotkeyEnabled.Checked; UpdateHotkey(); controller.Store.Save(controller.Settings); } };
-            hotkeyChoice.SelectedIndexChanged += delegate { if (!updating) { controller.Settings.HotkeyPreset = hotkeyChoice.SelectedIndex; UpdateHotkey(); controller.Store.Save(controller.Settings); } };
             page.Controls.Add(access);
             var netease = Theme.Card(); netease.Height = 204; netease.Margin = new Padding(0, 0, 0, 18);
             var neteaseTitle = Theme.Label("网易云稳定接入", 13, Theme.Text); neteaseTitle.Font = Theme.Font(13, FontStyle.Bold); neteaseTitle.SetBounds(24, 18, 520, 30); netease.Controls.Add(neteaseTitle);
@@ -495,7 +576,12 @@ namespace MusicBar
                 catch (Exception ex) { neteaseHint.Text = "修复失败：" + ex.Message; }
             };
             var restoreNetEase = Theme.Button("还原启动方式", false); restoreNetEase.SetBounds(232, 140, 148, 36); netease.Controls.Add(restoreNetEase);
-            restoreNetEase.Click += delegate { try { neteaseHint.Text = NetEaseLaunchIntegration.Restore(controller.Store.DataDirectory); } catch (Exception ex) { neteaseHint.Text = "还原失败：" + ex.Message; } };
+            restoreNetEase.Click += delegate
+            {
+                pendingNetEasePath = ""; neteaseRecoveryStatus = ""; verifyingNetEaseStart = false; neteaseStartTimer.Stop();
+                try { neteaseHint.Text = NetEaseLaunchIntegration.Restore(controller.Store.DataDirectory); }
+                catch (Exception ex) { neteaseHint.Text = "还原失败：" + ex.Message; }
+            };
             page.Controls.Add(netease);
             var updates = Theme.Card(); updates.Height = 115; updates.Margin = new Padding(0, 0, 0, 18);
             var automatic = Theme.Check("自动检查 MusicBar 更新", controller.Settings.AutoCheckUpdates); automatic.Location = new Point(24, 18); updates.Controls.Add(automatic);
@@ -606,6 +692,7 @@ namespace MusicBar
             if (text.Length == 0) { lyricStatus.Text = "请输入歌名和歌手。"; return; }
             if (searchRequest != null) { searchRequest.Cancel(); searchRequest.Dispose(); }
             var request = new CancellationTokenSource(); searchRequest = request;
+            lyricStatusRequest = request;
             MusicPlayer player = lyricSource.SelectedIndex == 0 ? MusicPlayer.QQMusic : MusicPlayer.NetEase;
             resultsTrackKey = controller.Snapshot.TrackKey;
             results.Items.Clear(); fetchButton.Enabled = false; searchButton.Enabled = false; lyricStatus.Text = "正在搜索歌词…";
@@ -618,7 +705,11 @@ namespace MusicBar
             }
             catch (OperationCanceledException) { }
             catch (Exception ex) { if (!IsDisposed) lyricStatus.Text = "搜索失败，可导入本地 LRC。" + Environment.NewLine + ex.Message; }
-            finally { if (!IsDisposed) searchButton.Enabled = true; }
+            finally
+            {
+                if (lyricStatusRequest == request) lyricStatusRequest = null;
+                if (!IsDisposed) searchButton.Enabled = true;
+            }
         }
         private async Task UseSelectedLyric()
         {
@@ -629,6 +720,7 @@ namespace MusicBar
             string before = controller.Snapshot.TrackKey;
             if (searchRequest != null) { searchRequest.Cancel(); searchRequest.Dispose(); }
             var request = new CancellationTokenSource(); searchRequest = request;
+            lyricStatusRequest = request;
             fetchButton.Enabled = false; lyricStatus.Text = "正在获取所选歌词…";
             try
             {
@@ -637,10 +729,15 @@ namespace MusicBar
                 if (controller.Snapshot.TrackKey != before) { lyricStatus.Text = "获取过程中播放器已切歌，请重新选择歌词。"; return; }
                 if (doc == null || !doc.HasTimedLyrics && string.IsNullOrWhiteSpace(doc.PlainText)) { lyricStatus.Text = "该歌曲暂时没有可用歌词，可导入 LRC。"; return; }
                 controller.ApplyDocument(doc);
+                lyricStatus.Text = controller.Message;
             }
             catch (OperationCanceledException) { }
             catch (Exception ex) { if (!IsDisposed) lyricStatus.Text = "获取歌词失败：" + ex.Message; }
-            finally { if (!IsDisposed) fetchButton.Enabled = results.SelectedItem is LyricSearchResult; }
+            finally
+            {
+                if (lyricStatusRequest == request) lyricStatusRequest = null;
+                if (!IsDisposed) fetchButton.Enabled = results.SelectedItem is LyricSearchResult;
+            }
         }
         private LyricDocument displayedDocument;
         private bool displayedTranslations;
@@ -659,14 +756,18 @@ namespace MusicBar
             songArtist.Text = snapshot.HasTrack ? snapshot.Artist + "  ·  " + MusicSnapshot.PlayerName(snapshot.Player) : "打开 QQ 音乐或网易云音乐，并播放一首歌";
             if (controller.IsSongInfo && controller.Document != null && controller.Document.HasTimedLyrics)
                 liveLine.Text = snapshot.HasTimeline || controller.ManualMode ? "歌词已连接，等待第一句…" : "歌词已连接，等待播放器进度";
-            else liveLine.Text = controller.IsSongInfo ? (controller.Searching ? "正在获取歌词…" : "当前显示歌名，歌词尚未获取成功") : !string.IsNullOrWhiteSpace(controller.Current) ? controller.Current : controller.Searching ? "正在匹配歌词…" : "歌词将在这里和任务栏同步显示";
+            else if (controller.Document != null && !controller.Document.HasTimedLyrics && string.IsNullOrWhiteSpace(controller.Document.PlainText)) liveLine.Text = controller.Document.Source + "，当前显示歌名";
+            else liveLine.Text = controller.NeedsNetEaseIntegration && !controller.ManualMode ? "等待网易云播放进度接入" : controller.IsSongInfo ? (controller.Searching ? "正在获取歌词…" : "当前显示歌名，歌词尚未获取成功") : !string.IsNullOrWhiteSpace(controller.Current) ? controller.Current : controller.Searching ? "正在匹配歌词…" : "歌词将在这里和任务栏同步显示";
             liveTranslation.Text = !s.ShowTranslation ? "译文显示已关闭" : !string.IsNullOrWhiteSpace(controller.CurrentTranslation) ? controller.CurrentTranslation : controller.Document == null ? "有译文时会在这里和任务栏第二行显示" : controller.Document.HasTranslation ? "当前句没有对应译文" : string.IsNullOrWhiteSpace(controller.Document.TranslationStatus) ? "该歌词源未提供译文" : controller.Document.TranslationStatus;
-            connectionHint.Text = controller.Message + (snapshot.HasTrack && !snapshot.HasTimeline ? Environment.NewLine
-                + (snapshot.Player == MusicPlayer.NetEase ? "请从网易云托盘退出，再点本页「启动网易云接入」，以读取当前版本的真实进度。" : "此播放器未提供播放进度：可到「歌词管理」开始手动同步。") : "");
+            if (snapshot.Player == MusicPlayer.NetEase && snapshot.HasTimeline) neteaseRecoveryStatus = "";
+            connectionHint.Text = pendingNetEasePath.Length > 0 || neteaseRecoveryStatus.Length > 0 ? neteaseRecoveryStatus : controller.Message + (snapshot.HasTrack && !snapshot.HasTimeline && !controller.Message.Contains("修复并启动接入") ? Environment.NewLine
+                + (snapshot.Player == MusicPlayer.NetEase ? "请点本页「修复并启动接入」。启动方式修复后，从网易云托盘退出一次，MusicBar 会自动重新接入。" : "此播放器未提供播放进度：可到「歌词管理」开始手动同步。") : "");
+            neteaseLaunchButton.Text = pendingNetEasePath.Length > 0 ? "等待网易云退出" : controller.NetEaseRunning && controller.NeedsNetEaseIntegration ? "修复并启动接入" : "启动网易云接入";
+            neteaseLaunchButton.Enabled = pendingNetEasePath.Length == 0;
             qqStatus.Text = !s.QQEnabled ? "●  插件已关闭" : snapshot.Player == MusicPlayer.QQMusic && snapshot.HasTrack
                 ? snapshot.HasTimeline ? "●  已连接播放信息" : "●  已连接歌名，未提供进度" : controller.QQRunning ? "●  已运行，等待媒体信息" : "●  等待播放器启动";
             neteaseStatus.Text = !s.NetEaseEnabled ? "●  插件已关闭" : snapshot.Player == MusicPlayer.NetEase && snapshot.HasTrack
-                ? snapshot.HasTimeline ? "●  已连接真实播放进度" : "●  已连接歌名，未提供进度" : controller.NetEaseRunning ? "●  已运行，请启动网易云接入" : "●  等待播放器启动";
+                ? snapshot.HasTimeline ? "●  已连接真实播放进度" : "●  缺少播放进度，请修复接入" : controller.NetEaseRunning ? "●  已运行，请启动网易云接入" : "●  等待播放器启动";
             qqStatus.ForeColor = snapshot.Player == MusicPlayer.QQMusic && snapshot.HasTimeline ? Theme.Accent : Theme.Muted;
             neteaseStatus.ForeColor = snapshot.Player == MusicPlayer.NetEase && snapshot.HasTimeline ? Theme.Accent : Theme.Muted;
             previewButton.Text = s.PreviewEnabled ? "结束任务栏预览" : "预览任务栏效果";
@@ -684,8 +785,16 @@ namespace MusicBar
                         lyricLines.Items.Add(Clock(line.Seconds) + "  " + line.Text + (string.IsNullOrWhiteSpace(translated) ? "" : "  /  " + translated));
                     }
                     if (!displayedDocument.HasTimedLyrics && !string.IsNullOrWhiteSpace(displayedDocument.PlainText)) foreach (string line in displayedDocument.PlainText.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)) lyricLines.Items.Add(line);
-                    lyricStatus.Text = controller.Message;
                 }
+            }
+            // A failed/new-song lookup can have no document. Its status must still
+            // replace the previous song's connected message, without erasing the
+            // results or progress of an explicit manual search.
+            if (displayedControllerMessage != controller.Message || displayedStatusTrackKey != snapshot.PlaybackKey)
+            {
+                displayedControllerMessage = controller.Message;
+                displayedStatusTrackKey = snapshot.PlaybackKey;
+                if (lyricStatusRequest == null) lyricStatus.Text = controller.Message;
             }
             double position = controller.ManualMode ? controller.ManualPosition : snapshot.CurrentPosition;
             if (displayedDocument != null && displayedDocument.HasTimedLyrics)
@@ -765,8 +874,19 @@ namespace MusicBar
         {
             if (player == MusicPlayer.NetEase && controller.Reader.IsPlayerRunning(player) && !NetEaseBridgeReader.OwnsListener(NetEaseBridgeReader.Port))
             {
-                RememberNetEasePath();
-                ShowError("启动网易云接入", "请先在网易云托盘菜单选择退出，再点「启动网易云接入」。随后在网易云播放歌曲，即可自动跟随真实进度。");
+                try
+                {
+                    RememberNetEasePath();
+                    string path = File.ReadAllText(Path.Combine(controller.Store.DataDirectory, "netease-player-path.txt")).Trim();
+                    if (!NetEaseLaunchIntegration.ValidPlayer(path)) throw new InvalidOperationException("未找到正在运行的网易云安装路径，请在常规设置选择 cloudmusic.exe。");
+                    NetEaseLaunchIntegration.Configure(path, controller.Store.DataDirectory);
+                    verifyingNetEaseStart = false; pendingNetEasePath = path;
+                    neteaseStartDeadline = DateTime.UtcNow.AddMinutes(10);
+                    neteaseRecoveryStatus = "已修复网易云启动方式。请从网易云托盘菜单选择退出；MusicBar 会自动重新打开网易云，随后播放歌曲即可同步歌词。";
+                    neteaseStartTimer.Start();
+                    ControllerChanged(this, EventArgs.Empty);
+                }
+                catch (Exception ex) { ShowError("网易云接入修复失败", ex.Message); }
                 return;
             }
             string exe = player == MusicPlayer.QQMusic ? "QQMusic.exe" : "cloudmusic.exe";
@@ -806,10 +926,49 @@ namespace MusicBar
             var start = new ProcessStartInfo(path) { UseShellExecute = true, WorkingDirectory = Path.GetDirectoryName(path) };
             if (player == MusicPlayer.NetEase)
             {
+                // A successful first launch also repairs ordinary shortcuts so
+                // the next session keeps the progress bridge. Backups remain reversible.
+                NetEaseLaunchIntegration.Configure(path, controller.Store.DataDirectory);
                 start.Arguments = NetEaseLaunchIntegration.Arguments;
                 SaveNetEasePath(path);
             }
             Process.Start(start);
+        }
+        private void CompleteNetEaseStart(object sender, EventArgs args)
+        {
+            if (verifyingNetEaseStart)
+            {
+                if (NetEaseBridgeReader.OwnsListener(NetEaseBridgeReader.Port))
+                {
+                    verifyingNetEaseStart = false; neteaseStartTimer.Stop();
+                    neteaseRecoveryStatus = ""; ControllerChanged(this, EventArgs.Empty);
+                }
+                else if (DateTime.UtcNow >= neteaseStartDeadline || !controller.Settings.NetEaseEnabled)
+                {
+                    verifyingNetEaseStart = false; neteaseStartTimer.Stop();
+                    neteaseRecoveryStatus = "网易云重启后未开启播放进度接入。客户端更新可能丢失启动参数，请点「修复并启动接入」后从网易云托盘退出一次。";
+                    ControllerChanged(this, EventArgs.Empty);
+                }
+                return;
+            }
+            if (pendingNetEasePath.Length == 0) { neteaseStartTimer.Stop(); return; }
+            if (!controller.Settings.NetEaseEnabled || DateTime.UtcNow >= neteaseStartDeadline)
+            {
+                pendingNetEasePath = ""; neteaseStartTimer.Stop();
+                neteaseRecoveryStatus = "自动接入已取消。需要时可再次点击「修复并启动接入」。";
+                ControllerChanged(this, EventArgs.Empty); return;
+            }
+            if (controller.Reader.IsPlayerRunning(MusicPlayer.NetEase)) return;
+            string path = pendingNetEasePath; pendingNetEasePath = ""; neteaseStartTimer.Stop();
+            try
+            {
+                StartPlayer(path, MusicPlayer.NetEase);
+                neteaseRecoveryStatus = "网易云正在重新打开，等待确认播放进度接入…";
+                verifyingNetEaseStart = true; neteaseStartDeadline = DateTime.UtcNow.AddSeconds(12);
+                neteaseStartTimer.Start();
+            }
+            catch (Exception ex) { neteaseRecoveryStatus = "网易云接入启动失败：" + ex.Message; }
+            ControllerChanged(this, EventArgs.Empty);
         }
         private void RememberNetEasePath()
         {
@@ -833,6 +992,7 @@ namespace MusicBar
                 controller.Changed -= ControllerChanged;
                 controller.PlaybackFrame -= PlaybackFrameChanged;
                 appHotkey.Dispose();
+                neteaseStartTimer.Stop(); neteaseStartTimer.Dispose();
                 if (searchRequest != null) { searchRequest.Cancel(); searchRequest.Dispose(); }
                 if (previewImage != null && previewImage.Image != null) previewImage.Image.Dispose();
                 if (tray != null) tray.Dispose();
