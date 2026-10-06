@@ -1,5 +1,5 @@
 #ifndef AppVersion
-  #define AppVersion "1.0.20"
+  #define AppVersion "1.0.21"
 #endif
 #ifndef SourceDir
   #define SourceDir "..\dist\stage\MusicBar"
@@ -25,6 +25,7 @@ Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 LicenseFile={#SourceDir}\LICENSE
+SetupIconFile={#SourceDir}\MusicBar.ico
 UninstallDisplayIcon={app}\MusicBar.exe
 CloseApplications=yes
 CloseApplicationsFilter=MusicBar.exe
@@ -42,6 +43,7 @@ Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: 
 [Files]
 Source: "{#SourceDir}\MusicBar.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceDir}\MusicBar.exe.config"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#SourceDir}\MusicBar.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceDir}\update-source.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceDir}\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceDir}\README.md"; DestDir: "{app}"; Flags: ignoreversion
@@ -50,8 +52,8 @@ Source: "{#SourceDir}\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Name: "{app}\data"; Flags: uninsneveruninstall
 
 [Icons]
-Name: "{autoprograms}\MusicBar"; Filename: "{app}\MusicBar.exe"
-Name: "{autodesktop}\MusicBar"; Filename: "{app}\MusicBar.exe"; Tasks: desktopicon
+Name: "{autoprograms}\MusicBar"; Filename: "{app}\MusicBar.exe"; IconFilename: "{app}\MusicBar.ico"; IconIndex: 0
+Name: "{autodesktop}\MusicBar"; Filename: "{app}\MusicBar.exe"; IconFilename: "{app}\MusicBar.ico"; IconIndex: 0; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\MusicBar.exe"; Description: "启动 MusicBar"; Flags: nowait postinstall skipifsilent

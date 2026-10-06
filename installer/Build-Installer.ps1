@@ -12,10 +12,10 @@ $distPath = Join-Path $projectDirectory 'dist'
 $stagePath = Join-Path $distPath 'stage\MusicBar'
 New-Item -ItemType Directory -Path $stagePath -Force | Out-Null
 # Stage contains only these explicitly allowed files. User data is never copied.
-$files = @('MusicBar.exe','MusicBar.exe.config','update-source.json','LICENSE','README.md')
+$files = @('MusicBar.exe','MusicBar.exe.config','MusicBar.ico','update-source.json','LICENSE','README.md')
 foreach ($existing in Get-ChildItem -LiteralPath $stagePath -Force) { if ($existing.PSIsContainer -or $existing.Name -notin $files) { throw '分发暂存目录存在额外文件，请检查后使用干净目录。' } }
 foreach ($file in $files) {
-    $source = if ($file -in @('MusicBar.exe','MusicBar.exe.config')) { Join-Path $projectDirectory ('release\' + $file) } else { Join-Path $projectDirectory $file }
+    $source = if ($file -in @('MusicBar.exe','MusicBar.exe.config','MusicBar.ico')) { Join-Path $projectDirectory ('release\' + $file) } else { Join-Path $projectDirectory $file }
     Copy-Item -LiteralPath $source -Destination (Join-Path $stagePath $file) -Force
 }
 if (-not $CompilerPath) {
