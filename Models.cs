@@ -125,7 +125,7 @@ namespace MusicBar
         [DataMember] public bool OverlayEnabled = true;
         [DataMember] public bool OnlineLyrics = true;
         [DataMember] public bool AutoCheckUpdates = true;
-        [DataMember] public bool HideWhenPaused = false;
+        [DataMember] public bool HideWhenPaused = true;
         [DataMember] public bool HideInstrumental = true;
         [DataMember] public double InstrumentalHoldSeconds = 10;
         [DataMember] public bool TwoLines = false;
@@ -171,6 +171,7 @@ namespace MusicBar
             TranslationFontFamily = "";
             AutoCheckUpdates = true;
             HideInstrumental = true;
+            HideWhenPaused = true;
             InstrumentalHoldSeconds = 10;
             KaraokeEnabled = true;
             BoldLyrics = true;

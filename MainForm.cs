@@ -105,10 +105,10 @@ namespace MusicBar
             controller.PlaybackFrame += PlaybackFrameChanged;
             FormClosing += delegate(object sender, FormClosingEventArgs e)
             {
-                if (!exiting && e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; tray.Visible = true; Hide(); }
+                if (!exiting && e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; ApplyApplicationIconVisibility(); Hide(); }
             };
-            Resize += delegate { if (WindowState == FormWindowState.Minimized) { tray.Visible = true; Hide(); } };
-            Shown += delegate { tray.Visible = true; if (this.startInTray) BeginInvoke((MethodInvoker)delegate { ShowInTaskbar = false; Hide(); }); };
+            Resize += delegate { if (WindowState == FormWindowState.Minimized) { ApplyApplicationIconVisibility(); Hide(); } };
+            Shown += delegate { ApplyApplicationIconVisibility(); if (this.startInTray) BeginInvoke((MethodInvoker)delegate { ShowInTaskbar = false; Hide(); }); };
             updating = false;
             overlay.UpdateSettings(controller.Settings);
             ControllerChanged(this, EventArgs.Empty);
@@ -361,7 +361,7 @@ namespace MusicBar
             preferred = Theme.Combo(); preferred.Items.AddRange(new object[] { "自动选择正在播放的播放器", "优先 QQ 音乐", "优先网易云音乐" }); preferred.SelectedIndex = (int)s.PreferredPlayer;
             preferred.SelectedIndexChanged += delegate { if (!updating) { s.PreferredPlayer = (MusicPlayer)preferred.SelectedIndex; Apply(false); } }; AddSetting(behavior, "播放器选择", preferred, "多个播放器同时播放时按优先级选择。");
             var click = Theme.Check("锁定位置（鼠标穿透）", s.ClickThrough); positionLock = click; click.CheckedChanged += delegate { if (!updating && s.ClickThrough != click.Checked) TogglePositionLock(); }; AddSetting(behavior, "歌词拖动", click, "取消锁定后，可按住歌词左右拖动。");
-            var pause = Theme.Check("暂停时隐藏歌词", s.HideWhenPaused); pause.CheckedChanged += delegate { if (!updating) { s.HideWhenPaused = pause.Checked; Apply(false); } }; AddSetting(behavior, "暂停播放", pause, "默认暂停时保留当前行。");
+            var pause = Theme.Check("暂停时隐藏歌词", s.HideWhenPaused); pause.CheckedChanged += delegate { if (!updating) { s.HideWhenPaused = pause.Checked; Apply(false); } }; AddSetting(behavior, "暂停播放", pause, "开启后暂停立即隐藏，继续播放时恢复；关闭则保留当前行。");
             var instrumental = Theme.Check("前奏、间奏和尾奏隐藏歌词", s.HideInstrumental); instrumental.CheckedChanged += delegate { if (!updating) { s.HideInstrumental = instrumental.Checked; Apply(false); } }; AddSetting(behavior, "伴奏片段", instrumental, "空行、间奏标记和制作信息自动隐藏；下一句开始时恢复。");
             var instrumentalHold = Theme.Number(3, 20, (decimal)s.InstrumentalHoldSeconds, 1); instrumentalHold.Increment = 0.5M;
             instrumentalHold.ValueChanged += delegate { if (!updating) { s.InstrumentalHoldSeconds = (double)instrumentalHold.Value; Apply(false); } }; AddSetting(behavior, "长间隔停留（秒）", instrumentalHold, "歌词未标注唱完时间时，长间隔中的旧句按此时间收起；拖长音可调大。");
@@ -493,8 +493,8 @@ namespace MusicBar
             };
             page.Controls.Add(card);
             var access = Theme.Card(); access.Height = 228; access.Margin = new Padding(0, 0, 0, 18);
-            var hiddenIcon = Theme.Check("隐藏任务栏应用图标", controller.Settings.HideTaskbarIcon); hiddenIcon.Location = new Point(24, 18); access.Controls.Add(hiddenIcon);
-            hiddenIcon.CheckedChanged += delegate { if (!updating) { controller.Settings.HideTaskbarIcon = hiddenIcon.Checked; ShowInTaskbar = !hiddenIcon.Checked; controller.Store.Save(controller.Settings); } };
+            var hiddenIcon = Theme.Check("隐藏应用图标（任务栏和托盘）", controller.Settings.HideTaskbarIcon); hiddenIcon.Location = new Point(24, 18); access.Controls.Add(hiddenIcon);
+            hiddenIcon.CheckedChanged += delegate { if (!updating) { controller.Settings.HideTaskbarIcon = hiddenIcon.Checked; ApplyApplicationIconVisibility(); controller.Store.Save(controller.Settings); } };
             var hotkeyEnabled = Theme.Check("使用快捷键打开 MusicBar", controller.Settings.EnableHotkey); hotkeyEnabled.Location = new Point(24, 66); access.Controls.Add(hotkeyEnabled);
             var hotkeyInput = new TextBox { ReadOnly = true, BackColor = Theme.Input, ForeColor = Theme.Text, Font = Theme.Font(10, FontStyle.Regular), BorderStyle = BorderStyle.FixedSingle, AccessibleName = "打开 MusicBar 的快捷键" };
             hotkeyInput.Text = AppHotkey.Describe(controller.Settings.EffectiveHotkeyKey, controller.Settings.EffectiveHotkeyModifiers);
@@ -981,7 +981,12 @@ namespace MusicBar
             try { File.WriteAllText(Path.Combine(controller.Store.DataDirectory, "netease-player-path.txt"), path); } catch { }
         }
         private void ShowError(string title, string message) { MessageBox.Show(this, message, title, MessageBoxButtons.OK, MessageBoxIcon.Information); }
-        public void RestoreWindow() { ShowInTaskbar = !controller.Settings.HideTaskbarIcon; Show(); WindowState = FormWindowState.Normal; Activate(); }
+        private void ApplyApplicationIconVisibility()
+        {
+            ShowInTaskbar = !controller.Settings.HideTaskbarIcon;
+            tray.Visible = !exiting && !controller.Settings.HideTaskbarIcon;
+        }
+        public void RestoreWindow() { ApplyApplicationIconVisibility(); Show(); WindowState = FormWindowState.Normal; Activate(); }
         public void ExitApplication() { exiting = true; tray.Visible = false; Close(); Application.Exit(); }
         protected override void Dispose(bool disposing)
         {
