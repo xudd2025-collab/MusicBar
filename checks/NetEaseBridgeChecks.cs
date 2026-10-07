@@ -44,6 +44,7 @@ internal static class NetEaseBridgeChecks
         VerifyBridgeInterruption(now);
         VerifyLaunchArguments();
         VerifyDirectLyrics().GetAwaiter().GetResult();
+        VerifyIntegrationRecovery();
         Console.WriteLine("NetEase bridge checks passed: "+passed);
     }
     static void VerifyBridgeInterruption(DateTime now)
@@ -111,6 +112,40 @@ internal static class NetEaseBridgeChecks
                 "{\"code\":200,\"lrc\":{\"lyric\":\"[00:00]"+lyric+"\\n[00:02]Tail\"},\"tlyric\":{\"lyric\":\"[00:00]Translated\\n[00:02]Ending\"}}";
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK){Content=new StringContent(body)});
         }
+    }
+    static void WaitForLyrics(LyricController controller)
+    {
+        var context=SynchronizationContext.Current;
+        DateTime until=DateTime.UtcNow.AddSeconds(5);
+        while(controller.Searching&&DateTime.UtcNow<until) {
+            System.Windows.Forms.Application.DoEvents();
+            SynchronizationContext.SetSynchronizationContext(context);Thread.Sleep(1);
+        }
+        System.Windows.Forms.Application.DoEvents();SynchronizationContext.SetSynchronizationContext(context);
+        Check(!controller.Searching,"Integration recovery finishes the lyric request");
+    }
+    static void VerifyIntegrationRecovery()
+    {
+        string folder=Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"bridge-recovery-"+Guid.NewGuid().ToString("N"));
+        try {
+            var handler=new LyricsHandler();var store=new SettingsStore(folder);
+            using(var repository=new LyricRepository(folder,handler))
+            using(var controller=new LyricController(new AppSettings { HideInstrumental=false },store,repository)) {
+                var plain=new MusicSnapshot { Player=MusicPlayer.NetEase,Title="Song",Artist="Artist",IsPlaying=true };
+                controller.ApplySnapshot(plain,DateTime.UtcNow);
+                Check(controller.NeedsNetEaseIntegration&&handler.Calls==0&&!controller.Searching&&controller.Message.Contains("修复并启动接入"),"Ordinary NetEase startup reports missing progress instead of attempting an unverifiable lyric match");
+                for(int i=0;i<10;i++)controller.ApplySnapshot(plain,DateTime.UtcNow.AddMinutes(i));
+                Check(handler.Calls==0&&controller.NextLyricRetryUtc==DateTime.MaxValue,"Missing progress never exhausts or repeatedly sends automatic matches");
+                var native=Snapshot(1,DateTime.UtcNow);native.Title="Song";native.Artist="Artist";
+                controller.ApplySnapshot(native,DateTime.UtcNow);WaitForLyrics(controller);
+                Check(!controller.NeedsNetEaseIntegration&&handler.Calls==1&&controller.Current=="First recording","A native sample after reconnect automatically loads the current recording without manual refresh");
+                native=Snapshot(1,DateTime.UtcNow);native.Title="Song";native.Artist="Artist";native.PlatformTrackId="456";
+                controller.ApplySnapshot(native,DateTime.UtcNow);WaitForLyrics(controller);
+                Check(handler.Calls==2&&controller.Current=="Second recording","Next recording replaces the previous lyrics after integration recovery");
+                controller.Settings.NetEaseEnabled=false;controller.SettingsChanged(false);
+                Check(!controller.NeedsNetEaseIntegration&&!controller.Snapshot.HasTrack,"Disabling NetEase clears the integration requirement");
+            }
+        } finally { if(Directory.Exists(folder))Directory.Delete(folder,true); }
     }
     static async Task VerifyDirectLyrics()
     {

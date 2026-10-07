@@ -28,7 +28,80 @@ internal static class QQMatchingChecks
     static LyricSearchResult Song(string id,string title,string album,double duration=261.013){return new LyricSearchResult{Player=MusicPlayer.NetEase,Id=id,Title=title,Artist="YOASOBI",Album=album,DurationSeconds=duration};}
     static bool Match(MusicSnapshot observed,params LyricSearchResult[] results){observed.Player=MusicPlayer.NetEase;return LyricRepository.SelectAutomaticMatch(observed,results,true)!=null;}
     [STAThread]
-    public static int Main(){try{Names();ArtistNames();DisplayFormats();Fallback().GetAwaiter().GetResult();AliasFallback().GetAwaiter().GetResult();CatalogFallback().GetAwaiter().GetResult();ParallelLoading().GetAwaiter().GetResult();ControllerRecovery();RefreshContinuity();LateInformationRecovery();Console.WriteLine("QQ matching/recovery checks passed: "+passed);return 0;}catch(Exception error){Console.Error.WriteLine(error);return 1;}}
+    public static int Main(){try{Names();ArtistNames();DisplayFormats();ProviderDuration();ProviderDurationFallback().GetAwaiter().GetResult();Fallback().GetAwaiter().GetResult();AliasFallback().GetAwaiter().GetResult();CatalogFallback().GetAwaiter().GetResult();ParallelLoading().GetAwaiter().GetResult();ControllerRecovery();RefreshContinuity();LateInformationRecovery();Console.WriteLine("QQ matching/recovery checks passed: "+passed);return 0;}catch(Exception error){Console.Error.WriteLine(error);return 1;}}
+    static MusicSnapshot FancuoTrack(){return new MusicSnapshot{Player=MusicPlayer.QQMusic,Title="犯错",Artist="顾峰 / 斯琴高丽",Album="顾式情歌",DurationSeconds=193.463};}
+    static LyricSearchResult FancuoSong(string id="89551"){return new LyricSearchResult{Player=MusicPlayer.NetEase,Id=id,Title="犯错",Artist="顾峰 / 斯琴高丽",Album="顾式情歌",DurationSeconds=196.320};}
+    static void ProviderDuration(){
+        Check(Match(FancuoTrack(),FancuoSong()),"QQ alternative accepts the actual 193.463/196.320 second recording with exact complete identity");
+        var observed=FancuoTrack();observed.Player=MusicPlayer.NetEase;
+        Check(LyricRepository.SelectAutomaticMatch(observed,new[]{FancuoSong()})==null,"Native NetEase retains its normal duration tolerance");
+        observed=FancuoTrack();var candidate=FancuoSong();candidate.Player=MusicPlayer.QQMusic;
+        Check(LyricRepository.SelectAutomaticMatch(observed,new[]{candidate})==null,"Primary QQ matching retains its normal duration tolerance");
+        foreach(int mismatch in new[]{0,1,2,3,4,5,6,7,8}){
+            candidate=FancuoSong();
+            if(mismatch==0)candidate.Album="其他专辑";
+            if(mismatch==1)candidate.Artist="顾峰";
+            if(mismatch==2)candidate.Artist+=" / 其他歌手";
+            if(mismatch==3)candidate.Title+=" (Live)";
+            if(mismatch==4)candidate.DurationSeconds=197.464;
+            if(mismatch==5)candidate.DurationSeconds=double.NaN;
+            if(mismatch==6)candidate.DurationSeconds=double.PositiveInfinity;
+            if(mismatch==7)candidate.DurationSeconds=0;
+            if(mismatch==8){candidate.Album="Other album";candidate.AlbumAliases.Add("顾式情歌");}
+            Check(!Match(FancuoTrack(),candidate),"Expanded provider tolerance rejects incompatible identity or duration: "+mismatch);
+        }
+        foreach(int missing in new[]{0,1}){
+            observed=FancuoTrack();if(missing==0)observed.Artist="";else observed.Album="";
+            Check(!Match(observed,FancuoSong()),"Expanded provider tolerance requires complete observed identity: "+missing);
+        }
+        observed=FancuoTrack();observed.DurationSeconds=double.PositiveInfinity;
+        Check(!Match(observed,FancuoSong()),"Nonfinite observed duration cannot use provider tolerance");
+        candidate=FancuoSong();candidate.DurationSeconds=197.463;
+        Check(Match(FancuoTrack(),candidate),"Four seconds is the maximum exact provider duration allowance");
+        candidate=FancuoSong();candidate.Artist="斯琴高丽 / 顾峰";
+        Check(Match(FancuoTrack(),candidate),"The full artist set can be listed in a different order");
+        candidate=FancuoSong("duplicate");candidate.DurationSeconds=196;
+        Check(!Match(FancuoTrack(),FancuoSong(),candidate),"Two provider recordings remain ambiguous");
+        candidate.DurationSeconds=193.463;
+        Check(!Match(FancuoTrack(),FancuoSong(),candidate),"A nearest duration cannot resolve expanded provider ambiguity");
+        observed=FancuoTrack();observed.Title="犯错 (歌曲译名)";
+        Check(!Match(observed,FancuoSong()),"Display title compensation cannot combine with expanded duration");
+        observed=FancuoTrack();observed.Artist="顾峰 (Gu Feng) / 斯琴高丽";
+        Check(!Match(observed,FancuoSong()),"Artist alias compensation cannot combine with expanded duration");
+    }
+    sealed class ProviderDurationHandler:HttpMessageHandler{
+        internal int Calls;
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken token){
+            token.ThrowIfCancellationRequested();Calls++;string body;
+            if(request.RequestUri.Host=="u.y.qq.com")body="{\"code\":0,\"request\":{\"code\":2001}}";
+            else if(request.RequestUri.AbsolutePath=="/api/search/get/web")
+                body=new JavaScriptSerializer().Serialize(new{code=200,result=new{songs=new[]{new{id=89551,name="犯错",duration=196320,artists=new[]{new{name="顾峰"},new{name="斯琴高丽"}},album=new{name="顾式情歌"}}}}});
+            else if(request.RequestUri.AbsolutePath=="/api/song/lyric")
+                body=new JavaScriptSerializer().Serialize(new{code=200,lrc=new{lyric="[00:01]沉默不是代表我的错\n[00:04]下一句"}});
+            else throw new Exception("Unexpected provider-duration fixture endpoint");
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK){Content=new StringContent(body,Encoding.UTF8,"application/json")});
+        }
+    }
+    static async Task ProviderDurationFallback(){
+        string directory=Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"qq-provider-duration-"+Guid.NewGuid().ToString("N"));
+        try{
+            var handler=new ProviderDurationHandler();
+            using(var repository=new LyricRepository(directory,handler)){
+                var document=await repository.FindAsync(FancuoTrack(),CancellationToken.None);
+                Check(document!=null&&document.HasTimedLyrics&&document.Source.Contains("QQ 音乐备用歌词")&&handler.Calls==3,"QQ code 2001 falls back automatically for the actual 犯错 recording");
+                Check(Directory.Exists(Path.Combine(directory,"lyric-match-v1"))&&Directory.GetFiles(Path.Combine(directory,"lyric-match-v1")).Length==1,"Provider duration match persists its recording binding");
+                Check(Directory.Exists(Path.Combine(directory,"lyric-cache-v1"))&&Directory.GetFiles(Path.Combine(directory,"lyric-cache-v1")).Length==1,"Provider duration match persists its timed lyric cache");
+            }
+            handler=new ProviderDurationHandler();
+            using(var repository=new LyricRepository(directory,handler)){
+                var document=await repository.FindAsync(FancuoTrack(),CancellationToken.None);
+                Check(document!=null&&document.HasTimedLyrics&&document.Source.Contains("缓存")&&handler.Calls==0,"Reopening validates the expanded provider binding and uses cached lyrics without network (source="+(document==null?"null":document.Source)+", calls="+handler.Calls+")");
+                var changed=FancuoTrack();changed.DurationSeconds=180;
+                bool rejected=false;try{await repository.FindAsync(changed,CancellationToken.None);}catch(InvalidOperationException error){rejected=error.Message.Contains("2001");}
+                Check(rejected&&handler.Calls==2,"Changed recording duration cannot reuse the fallback cache binding");
+            }
+        }finally{DeleteTemporaryDirectory(directory);}
+    }
     static void Names(){
         Check(LyricRepository.TrimTranslatedDisplaySuffix("鳥の詩（鸟之诗）")=="鳥の詩","Japanese title with full-width Chinese translation");
         Check(LyricRepository.TrimTranslatedDisplaySuffix("扉をあけて (打开门)")=="扉をあけて","ANZA display translation");

@@ -19,6 +19,23 @@ namespace MusicBar
                 store.Save(defaults); var colorSettings = store.Load();
                 Check(colorSettings.TranslationColor == "#12AB34" && colorSettings.TranslationActiveColor == "#FE8721" && colorSettings.HotkeyPreset == 2 && colorSettings.HideTaskbarIcon, "translation palette and application access settings survive restart");
                 Check(colorSettings.TranslationFontFamily == "等线", "independent translation font survives restart");
+                Check(colorSettings.EffectiveHotkeyKey == 0x4D && colorSettings.EffectiveHotkeyModifiers == 5, "existing Alt Shift M preset stays effective after upgrade");
+                var customSettings = new AppSettings { UseCustomHotkey = true, HotkeyKey = 0x4B, HotkeyModifiers = 3 };
+                Check(store.Save(customSettings), "custom hotkey settings saved");
+                var customRestored = store.Load();
+                Check(customRestored.UseCustomHotkey && customRestored.EffectiveHotkeyKey == 0x4B && customRestored.EffectiveHotkeyModifiers == 3, "Ctrl Alt K survives restart without becoming a preset");
+                Check(AppSettings.ValidHotkey(0x77, 6) && AppSettings.ValidHotkey(0x35, 1) && AppSettings.ValidHotkey(0x4A, 7), "function keys, digits and all three modifiers are supported");
+                Check(!AppSettings.ValidHotkey(0x41, 0) && !AppSettings.ValidHotkey(0x41, 4), "global hotkeys never capture plain or Shift-only typing");
+                for (int functionKey = 0x70; functionKey <= 0x87; functionKey++)
+                    Check(AppSettings.ValidHotkey(functionKey, 0) && AppSettings.ValidHotkey(functionKey, 4), "standalone and Shift function keys: " + functionKey);
+                var singleKeySettings = new AppSettings { UseCustomHotkey = true, HotkeyKey = 0x70, HotkeyModifiers = 0 };
+                Check(store.Save(singleKeySettings), "standalone F1 settings saved");
+                var singleKeyRestored = store.Load();
+                Check(singleKeyRestored.UseCustomHotkey && singleKeyRestored.EffectiveHotkeyKey == 0x70 && singleKeyRestored.EffectiveHotkeyModifiers == 0, "standalone F1 survives normalization and restart");
+                Check(!AppSettings.ValidHotkey(0x11, 3) && !AppSettings.ValidHotkey(0x01, 3) && !AppSettings.ValidHotkey(0x10041, 3), "modifier-only, mouse and invalid key values rejected");
+                Check(!AppSettings.ValidHotkey(0x41, 8) && !AppSettings.ValidHotkey(0x41, 0x4003), "unsupported persisted modifier flags rejected");
+                customRestored.HotkeyKey = 0x11; customRestored.Normalize();
+                Check(!customRestored.UseCustomHotkey && customRestored.EffectiveHotkeyKey == 0x4D && customRestored.EffectiveHotkeyModifiers == 3, "invalid custom settings restore the default shortcut");
                 Check(defaults.QQEnabled && defaults.NetEaseEnabled && defaults.ClickThrough, "usable defaults");
                 Check(defaults.LyricBrightness == 100, "new lyric palettes display at their selected brightness");
                 defaults.Width = 700; defaults.TextColor = "#ABCDEF"; defaults.ActiveColor = "#29E89D";
@@ -33,6 +50,7 @@ namespace MusicBar
                 var upgraded = store.Load();
                 Check(upgraded.KaraokeEnabled && upgraded.BoldLyrics && upgraded.EnableHotkey && upgraded.TranslationColor == upgraded.TextColor && upgraded.TranslationActiveColor == upgraded.ActiveColor, "old settings acquire karaoke and translation palette without replacing colors");
                 Check(upgraded.TranslationFontFamily == "", "old settings follow the original font for translated text");
+                Check(!upgraded.UseCustomHotkey && upgraded.EffectiveHotkeyKey == 0x4D && upgraded.EffectiveHotkeyModifiers == 3, "older settings without custom fields retain Ctrl Alt M");
                 Check(upgraded.LyricBrightness == 115 && upgraded.ActiveColor == "#DAD74E", "old settings brighten without replacing the selected lyric color");
                 var brightColor = upgraded.Brightened(upgraded.Highlight);
                 Check(brightColor.R > upgraded.Highlight.R && brightColor.G > upgraded.Highlight.G && brightColor.B > upgraded.Highlight.B && brightColor.A == upgraded.Highlight.A, "brightness raises all amber color channels");
