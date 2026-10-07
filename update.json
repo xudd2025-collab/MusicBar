@@ -1,15 +1,15 @@
 {
-  "version": "1.0.20",
-  "notes": "- 本次发布包含 1.0.12 至 1.0.19 的全部修复与功能改进，升级保留现有设置和缓存。\r\n- 译文字体可跟随原文或单独选择；清晰雅黑、轻盈等线两款推荐风格同时应用于原文和译文。\r\n- 检查所选字体的中文字形；Mistral 等西文字体缺少中文时采用清晰雅黑，避免译文无提示地使用系统默认字体。\r\n- 改译文字体会立即重画当前句，保留原文绘制、颜色和演唱进度；保留 1.0.19 的外观与下载并安装流程改进。",
-  "release_url": "https://github.com/xudd2025-collab/MusicBar/releases/tag/v1.0.20",
+  "version": "1.0.21",
+  "notes": "- 修复网易云普通启动后只显示歌名的问题提示与恢复流程：缺少真实进度时直接提示修复接入，不再进行无法确认的自动匹配；点击修复后备份并更新快捷方式，正常退出网易云后自动重新接入，后续切歌按歌曲 ID 获取歌词。\r\n- 修复 QQ 普通歌词为空或只有纯文字时仍只显示歌名的问题：自动识别原生 QRC 逐字歌词的编码和时间轴，并修复旧的无时间轴缓存；按歌曲编号独立处理后续歌曲。\n- 修复 QQ 歌词接口受限时，部分同一录音因平台时长相差约 3 秒而无法使用备用歌词的问题；仅在歌名、完整歌手和专辑严格一致时放宽至 4 秒，仍校验歌曲版本并拒绝歧义候选。\n- 修复无歌词时状态残留，以及播放器轮询覆盖手动查询进度和结果的问题。\n- 修复安装包、程序、任务栏和快捷方式缺少图标的问题，加入多尺寸应用图标。\n- 快捷键改为按键录入，支持 F1–F24 单个功能键及 Ctrl、Alt、Shift 组合；支持保存、恢复默认和关闭，占用冲突时保留原快捷键。\n- 升级保留现有设置、歌词缓存和手动绑定；旧版快捷键设置继续兼容。",
+  "release_url": "https://github.com/xudd2025-collab/MusicBar/releases/tag/v1.0.21",
   "installer": {
-    "name": "MusicBar-Setup-1.0.20.exe",
-    "sha256": "92e5224ee23b0878bf974fc3e3873fa18d8d5fa5cda02ea8c008c67b9e6eb5d0",
+    "name": "MusicBar-Setup-1.0.21.exe",
+    "sha256": "eb4ce49d06119a96bf091a2f9e68cfb11573a4d9f5116a04253382adb208d2e5",
     "urls": [
-      "https://github.com/xudd2025-collab/MusicBar/releases/download/v1.0.20/MusicBar-Setup-1.0.20.exe",
-      "https://raw.githubusercontent.com/xudd2025-collab/MusicBar/updates/releases/v1.0.20/MusicBar-Setup-1.0.20.exe",
-      "https://cdn.jsdelivr.net/gh/xudd2025-collab/MusicBar@updates/releases/v1.0.20/MusicBar-Setup-1.0.20.exe",
-      "https://fastly.jsdelivr.net/gh/xudd2025-collab/MusicBar@updates/releases/v1.0.20/MusicBar-Setup-1.0.20.exe"
+      "https://github.com/xudd2025-collab/MusicBar/releases/download/v1.0.21/MusicBar-Setup-1.0.21.exe",
+      "https://raw.githubusercontent.com/xudd2025-collab/MusicBar/updates/releases/v1.0.21/MusicBar-Setup-1.0.21.exe",
+      "https://cdn.jsdelivr.net/gh/xudd2025-collab/MusicBar@updates/releases/v1.0.21/MusicBar-Setup-1.0.21.exe",
+      "https://fastly.jsdelivr.net/gh/xudd2025-collab/MusicBar@updates/releases/v1.0.21/MusicBar-Setup-1.0.21.exe"
     ]
   }
 }
