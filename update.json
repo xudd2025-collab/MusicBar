@@ -1,15 +1,15 @@
-﻿{
-    "version":  "1.0.22",
-    "notes":  "- 加快首次获取歌词：QQ 普通歌词与逐字歌词并行读取，先显示可用时间轴；复用译文请求，减少重复读取，并提前启用严格匹配的备用来源。\n- 修复隐藏应用图标后重启仍出现托盘图标的问题；任务栏和托盘统一遵守设置，隐藏后仍可用快捷键或再次运行程序打开设置。\n- 暂停时隐藏歌词默认开启，继续播放恢复当前歌词；已有暂停显示偏好继续保留。升级保留歌词缓存、手动绑定和自定义快捷键。",
-    "release_url":  "https://github.com/xudd2025-collab/MusicBar/releases/tag/v1.0.22",
-    "installer":  {
-                      "name":  "MusicBar-Setup-1.0.22.exe",
-                      "sha256":  "e3d86d173319b0f9486117b4ed4672c348482faac3030281940f1a20ed9fa035",
-                      "urls":  [
-                                   "https://github.com/xudd2025-collab/MusicBar/releases/download/v1.0.22/MusicBar-Setup-1.0.22.exe",
-                                   "https://raw.githubusercontent.com/xudd2025-collab/MusicBar/updates/releases/v1.0.22/MusicBar-Setup-1.0.22.exe",
-                                   "https://cdn.jsdelivr.net/gh/xudd2025-collab/MusicBar@updates/releases/v1.0.22/MusicBar-Setup-1.0.22.exe",
-                                   "https://fastly.jsdelivr.net/gh/xudd2025-collab/MusicBar@updates/releases/v1.0.22/MusicBar-Setup-1.0.22.exe"
-                               ]
-                  }
+{
+  "version": "1.0.22",
+  "notes": "- 加快首次获取歌词：QQ 普通歌词与逐字歌词并行读取，先显示可用时间轴；复用译文请求，减少重复读取，并提前启用严格匹配的备用来源。\n- 修复隐藏应用图标后重启仍出现托盘图标的问题；任务栏和托盘统一遵守设置，隐藏后仍可用快捷键或再次运行程序打开设置。\n- 暂停时隐藏歌词默认开启，继续播放恢复当前歌词；已有暂停显示偏好继续保留。升级保留歌词缓存、手动绑定和自定义快捷键。",
+  "release_url": "https://github.com/xudd2025-collab/MusicBar/releases/tag/v1.0.22",
+  "installer": {
+    "name": "MusicBar-Setup-1.0.22.exe",
+    "sha256": "e3d86d173319b0f9486117b4ed4672c348482faac3030281940f1a20ed9fa035",
+    "urls": [
+      "https://github.com/xudd2025-collab/MusicBar/releases/download/v1.0.22/MusicBar-Setup-1.0.22.exe",
+      "https://raw.githubusercontent.com/xudd2025-collab/MusicBar/updates/releases/v1.0.22/MusicBar-Setup-1.0.22.exe",
+      "https://cdn.jsdelivr.net/gh/xudd2025-collab/MusicBar@updates/releases/v1.0.22/MusicBar-Setup-1.0.22.exe",
+      "https://fastly.jsdelivr.net/gh/xudd2025-collab/MusicBar@updates/releases/v1.0.22/MusicBar-Setup-1.0.22.exe"
+    ]
+  }
 }
