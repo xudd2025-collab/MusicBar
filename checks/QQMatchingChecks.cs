@@ -28,7 +28,72 @@ internal static class QQMatchingChecks
     static LyricSearchResult Song(string id,string title,string album,double duration=261.013){return new LyricSearchResult{Player=MusicPlayer.NetEase,Id=id,Title=title,Artist="YOASOBI",Album=album,DurationSeconds=duration};}
     static bool Match(MusicSnapshot observed,params LyricSearchResult[] results){observed.Player=MusicPlayer.NetEase;return LyricRepository.SelectAutomaticMatch(observed,results,true)!=null;}
     [STAThread]
-    public static int Main(){try{Names();ArtistNames();DisplayFormats();ProviderDuration();ProviderDurationFallback().GetAwaiter().GetResult();Fallback().GetAwaiter().GetResult();AliasFallback().GetAwaiter().GetResult();CatalogFallback().GetAwaiter().GetResult();ParallelLoading().GetAwaiter().GetResult();ControllerRecovery();RefreshContinuity();LateInformationRecovery();Console.WriteLine("QQ matching/recovery checks passed: "+passed);return 0;}catch(Exception error){Console.Error.WriteLine(error);return 1;}}
+    public static int Main(){try{QrcRecovery().GetAwaiter().GetResult();Names();ArtistNames();DisplayFormats();ProviderDuration();ProviderDurationFallback().GetAwaiter().GetResult();Fallback().GetAwaiter().GetResult();AliasFallback().GetAwaiter().GetResult();CatalogFallback().GetAwaiter().GetResult();ParallelLoading().GetAwaiter().GetResult();ControllerRecovery();RefreshContinuity();LateInformationRecovery();Console.WriteLine("QQ matching/recovery checks passed: "+passed);return 0;}catch(Exception error){Console.Error.WriteLine(error);return 1;}}
+    // Synthetic independent format vector: no song lyrics are distributed.
+    const string QrcFixture = "1d3c2506ec0f7d139922dfa218b5ba10d860ad14dceedd6479387ef6fa91204fc54ad42399f0555933949229b04385b65f930c69ae7c6444cd7fb4a360a43a5e0d071cc9a39910b86beebaa827dedea55601385cf8141f29a29a0175b3ccd90b6bac56b856c67b2fbffb5deaa99f3d906482253a34d28cec24abfa0fd0e3d5d865767215b257b0961c173ce41978773982bd8afb97bc3089";
+    sealed class QrcHandler : HttpMessageHandler {
+        internal int LegacyCalls, WordCalls;
+        internal bool Broken, EmptyOrdinary;
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken token) {
+            token.ThrowIfCancellationRequested();string body;
+            if(request.RequestUri.Host=="c.y.qq.com") {
+                LegacyCalls++;body=new JavaScriptSerializer().Serialize(new{code=0,retcode=0,lyric=Convert.ToBase64String(Encoding.UTF8.GetBytes(EmptyOrdinary?"":"First lineNext line")),trans=""});
+            } else if(request.RequestUri.Host=="u.y.qq.com") {
+                WordCalls++;string payload=Uri.UnescapeDataString(request.RequestUri.Query);
+                Check(payload.Contains("GetPlayLyricInfo")&&payload.Contains("songMID"),"Recovery requests the selected QQ recording's native lyric format");
+                body=new JavaScriptSerializer().Serialize(new{code=0,lyrics=new{code=0,data=new{lyric=Broken?"0000000000000000":QrcFixture,trans=""}}});
+            } else throw new Exception("Unexpected QRC endpoint");
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK){Content=new StringContent(body,Encoding.UTF8,"application/json")});
+        }
+    }
+    static async Task QrcRecovery() {
+        string decoded=QQWordLyricDecoder.Decode(QrcFixture);
+        Check(decoded.Contains("First(1000,800)"),"Hexadecimal modified-DES zlib QRC format is decoded");
+        var words=LrcParser.ParseWordTiming(decoded);
+        Check(words.HasTimedLyrics&&words.Lines.Count==2&&words.Lines[0].Text=="First line","Native QRC provides actual lyric rows when ordinary LRC has no timestamps");
+        Check(words.Lines[0].Seconds==1&&words.Lines[0].EndSeconds==3&&words.Lines[0].Words.Count==2&&words.Lines[1].Seconds==5,"QRC line and word timestamps are preserved without estimates");
+        Check(!LrcParser.ParseWordTiming("First lineNext line").HasTimedLyrics,"Plain text never receives invented timestamps");
+        Check(!LrcParser.ParseWordTiming("<!DOCTYPE x [<!ENTITY e SYSTEM 'file:///unused'>]><x LyricContent='&e;' />").HasTimedLyrics,"QRC XML cannot load external entities");
+        foreach(string bad in new[]{"0","GG00000000000000","0000000000000000","6335a7ee6200586d523234bf9cab558f36b1974196768c2ca27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226a27b02aa779bf226db52bf6036cda8d9",new string('0',2*1024*1024+16)}) {
+            bool rejected=false;try{QQWordLyricDecoder.Decode(bad);}catch(InvalidOperationException){rejected=true;}
+            Check(rejected,"Malformed or oversized QRC is rejected");
+        }
+        string directory=Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"qrc-check-"+Guid.NewGuid().ToString("N"));
+        var song=new LyricSearchResult{Player=MusicPlayer.QQMusic,Id="QrcFixtureA",Title="Fixture A",Artist="Fixture artist",Album="Fixture album",DurationSeconds=10};
+        try {
+            var handler=new QrcHandler();
+            using(var repository=new LyricRepository(directory,handler)) {
+                var document=await repository.FetchAsync(song,CancellationToken.None);
+                Check(document.HasTimedLyrics&&document.Lines[0].Text=="First line"&&handler.LegacyCalls==1&&handler.WordCalls==1,"Untimed ordinary QQ lyrics automatically recover from native QRC");
+            }
+            handler=new QrcHandler();
+            using(var repository=new LyricRepository(directory,handler)) {
+                var document=await repository.FetchAsync(song,CancellationToken.None);
+                Check(document.HasTimedLyrics&&document.Lines[0].Words.Count==2&&handler.LegacyCalls==0&&handler.WordCalls==0,"Recovered timeline and words reload from cache without a network request");
+            }
+            foreach(string file in Directory.GetFiles(Path.Combine(directory,"lyric-cache-v1"),"*.xml")) {
+                var xml=new XmlDocument{XmlResolver=null};xml.Load(file);xml.DocumentElement.SelectSingleNode("wordTiming").InnerText="";xml.DocumentElement.SelectSingleNode("wordTimingChecked").InnerText="false";xml.Save(file);
+            }
+            handler=new QrcHandler();
+            using(var repository=new LyricRepository(directory,handler)) {
+                var document=await repository.FetchAsync(song,CancellationToken.None);
+                Check(document.HasTimedLyrics&&handler.LegacyCalls==0&&handler.WordCalls==1,"An old plain-text cache is repaired automatically for any QQ song");
+                song.Id="QrcFixtureB";song.Title="Fixture B";
+                document=await repository.FetchAsync(song,CancellationToken.None);
+                Check(document.HasTimedLyrics&&handler.LegacyCalls==1&&handler.WordCalls==2,"The next recording independently resolves its native lyric timeline");
+            }
+            handler=new QrcHandler{EmptyOrdinary=true};song.Id="QrcFixtureEmpty";
+            using(var repository=new LyricRepository(directory,handler)) {
+                var document=await repository.FetchAsync(song,CancellationToken.None);
+                Check(document.HasTimedLyrics&&handler.WordCalls==1,"An empty ordinary lyric response also tries the selected recording's QRC timeline");
+            }
+            handler=new QrcHandler{Broken=true};song.Id="QrcFixtureBroken";
+            using(var repository=new LyricRepository(directory,handler)) {
+                bool rejected=false;try{await repository.FetchAsync(song,CancellationToken.None);}catch(InvalidOperationException){rejected=true;}
+                Check(rejected,"Unreadable QRC remains a recoverable request failure instead of a successful plain-text cache");
+            }
+        } finally { DeleteTemporaryDirectory(directory); }
+    }
     static MusicSnapshot FancuoTrack(){return new MusicSnapshot{Player=MusicPlayer.QQMusic,Title="犯错",Artist="顾峰 / 斯琴高丽",Album="顾式情歌",DurationSeconds=193.463};}
     static LyricSearchResult FancuoSong(string id="89551"){return new LyricSearchResult{Player=MusicPlayer.NetEase,Id=id,Title="犯错",Artist="顾峰 / 斯琴高丽",Album="顾式情歌",DurationSeconds=196.320};}
     static void ProviderDuration(){
@@ -309,7 +374,9 @@ internal static class QQMatchingChecks
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken token) {
             token.ThrowIfCancellationRequested();
             string body;
-            if(request.RequestUri.Host=="u.y.qq.com") {
+            if(request.RequestUri.Host=="u.y.qq.com" && Uri.UnescapeDataString(request.RequestUri.Query).Contains("GetPlayLyricInfo")) {
+                body="{\"code\":0,\"lyrics\":{\"code\":0,\"data\":{\"lyric\":\"\",\"trans\":\"\"}}}";
+            } else if(request.RequestUri.Host=="u.y.qq.com") {
                 SearchCalls++;
                 if(FailuresRemaining>0) { FailuresRemaining--; body="{\"code\":0,\"request\":{\"code\":2001}}"; }
                 else body="{\"code\":0,\"request\":{\"code\":0,\"data\":{\"body\":{\"song\":{\"list\":"+(NoMatch?"[]":"[{\"mid\":\"retryfixture\",\"title\":\"Retry song\",\"interval\":120,\"singer\":[{\"name\":\"Retry artist\"}],\"album\":{\"name\":\"Retry album\"}}]")+"}}}}}";
