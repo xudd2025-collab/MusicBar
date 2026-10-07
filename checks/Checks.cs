@@ -14,6 +14,7 @@ namespace MusicBar
                 string checkDirectory = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "scratch", "root-checks", Guid.NewGuid().ToString("N")));
                 var store = new SettingsStore(checkDirectory);
                 var defaults = store.Load();
+                Check(defaults.HideWhenPaused, "new settings hide lyrics while paused");
                 Check(defaults.KaraokeEnabled && defaults.BoldLyrics && defaults.EnableHotkey && !defaults.HideTaskbarIcon, "usable karaoke, readability and hotkey defaults");
                 defaults.TranslationColor = "#12AB34"; defaults.TranslationActiveColor = "#FE8721"; defaults.TranslationFontFamily = "等线"; defaults.HotkeyPreset = 2; defaults.HideTaskbarIcon = true;
                 store.Save(defaults); var colorSettings = store.Load();
@@ -126,6 +127,13 @@ namespace MusicBar
                     controller.Snapshot = new MusicSnapshot { Player = MusicPlayer.QQMusic, Title = "测试歌曲", Artist = "测试歌手", PositionSeconds = 2, DurationSeconds = 100, HasTimeline = true, IsPlaying = false };
                     controller.ApplyDocument(document);
                     Check(controller.Current == "第一行" && !controller.ManualMode, "paused player uses actual position");
+                    Check(!controller.ShouldDisplay, "paused lyrics are retained internally and hidden with the default setting");
+                    settings.HideWhenPaused = false;
+                    Check(controller.ShouldDisplay, "users can keep the current lyric visible while paused");
+                    settings.HideWhenPaused = true;
+                    controller.Snapshot.IsPlaying = true;
+                    Check(controller.ShouldDisplay, "resuming playback restores the retained lyric without another lookup");
+                    controller.Snapshot.IsPlaying = false;
                     Check(!controller.IsSongInfo && controller.CurrentLineIndex == 0, "timed lyrics distinguished from song fallback");
                     Check(controller.CurrentTranslation == "第一句译文" && Math.Abs(controller.RemainingLineSeconds - 1.5) < 0.001, "same-line translation and actual line duration available for scrolling");
                     double pausedProgress = controller.OriginalKaraokeProgress;
