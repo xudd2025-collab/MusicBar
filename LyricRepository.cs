@@ -159,6 +159,13 @@ namespace MusicBar
             LyricDocument cached = TryReadCache(song, out cachedLrc, out translationRecentlyChecked);
             if (cached != null)
             {
+                // Older QQ responses can cache useful text without any timeline.
+                // Recover native QRC for any such song instead of keeping it stranded.
+                if (song.Player == MusicPlayer.QQMusic && !cached.HasTimedLyrics)
+                {
+                    cached = await RecoverQQTimelineAsync(song, cached, token).ConfigureAwait(false);
+                    if (cached.HasTimedLyrics) { TryWriteCache(song, cachedLrc, cached, true); translationRecentlyChecked = true; }
+                }
                 if (!translationRecentlyChecked || !cached.WordTimingChecked) StartTranslationCompletion(song, cached, cachedLrc, translationToken);
                 return cached;
             }
@@ -194,8 +201,13 @@ namespace MusicBar
             }
             token.ThrowIfCancellationRequested();
             LyricDocument document = CreateDocument(lrc, translation, source);
+            if (song.Player == MusicPlayer.QQMusic && !document.HasTimedLyrics)
+            {
+                document = await RecoverQQTimelineAsync(song, document, token).ConfigureAwait(false);
+                wordTiming = document.WordTiming; translatedWordTiming = document.TranslationWordTiming;
+            }
             document.WordTiming = wordTiming; document.TranslationWordTiming = translatedWordTiming;
-            document.WordTimingChecked = song.Player == MusicPlayer.NetEase;
+            document.WordTimingChecked = document.WordTimingChecked || song.Player == MusicPlayer.NetEase;
             LrcParser.ApplyWordTiming(document, wordTiming, false);
             LrcParser.ApplyWordTiming(document, translatedWordTiming, true);
             if (translationError.Length > 0) document.TranslationStatus = translationError;
@@ -204,6 +216,47 @@ namespace MusicBar
             if (HasUsefulLyrics(document)) TryWriteCache(song, lrc, document, document.HasTranslation);
             StartTranslationCompletion(song, document, lrc, translationToken);
             return document;
+        }
+
+        private async Task<IDictionary<string, object>> ReadQQWordBodyAsync(LyricSearchResult song, CancellationToken token)
+        {
+            var payload = new Dictionary<string, object>
+            {
+                { "comm", new Dictionary<string, object> { { "ct", 19 }, { "cv", 1859 }, { "uin", "0" } } },
+                { "lyrics", new Dictionary<string, object>
+                {
+                    { "module", "music.musichallSong.PlayLyricInfo" }, { "method", "GetPlayLyricInfo" },
+                    { "param", new Dictionary<string, object>
+                        { { "songMID", song.Id }, { "songID", 0 }, { "trans", 1 }, { "roma", 0 }, { "qrc", 1 }, { "crypt", 0 }, { "type", 0 } } }
+                } }
+            };
+            string url = "https://u.y.qq.com/cgi-bin/musicu.fcg?format=json&data=" + Uri.EscapeDataString(new JavaScriptSerializer().Serialize(payload));
+            var response = await GetJsonAsync(MusicPlayer.QQMusic, url, token).ConfigureAwait(false);
+            RequireCode(response, 0, MusicPlayer.QQMusic);
+            var lyrics = Child(response, "lyrics"); RequireCode(lyrics, 0, MusicPlayer.QQMusic);
+            var body = Child(lyrics, "data");
+            if (body == null) throw new InvalidOperationException("QQ 音乐逐字歌词的数据格式已变化。");
+            return body;
+        }
+        private static string DecodeQQWordLyrics(string value)
+        {
+            string text = (value ?? "").Trim();
+            return QQWordLyricDecoder.IsHexadecimal(text) ? QQWordLyricDecoder.Decode(text) : DecodeQQ(text);
+        }
+        private async Task<LyricDocument> RecoverQQTimelineAsync(LyricSearchResult song, LyricDocument original, CancellationToken token)
+        {
+            var body = await ReadQQWordBodyAsync(song, token).ConfigureAwait(false);
+            string words = DecodeQQWordLyrics(StringValue(body, "lyric"));
+            LyricDocument recovered = LrcParser.ParseWordTiming(words);
+            token.ThrowIfCancellationRequested();
+            if (!recovered.HasTimedLyrics) return original;
+            recovered.Source = original.Source;
+            recovered.WordTiming = words; recovered.WordTimingChecked = true;
+            recovered.Translation = original.HasTranslation ? original.Translation : DecodeQQ(StringValue(body, "trans"));
+            recovered.TranslationWordTiming = recovered.Translation;
+            recovered.TranslationSource = original.HasTranslation ? original.TranslationSource : "QQ 音乐 · 平台译文";
+            LrcParser.EnsureTranslation(recovered);
+            return recovered;
         }
 
         private void StartTranslationCompletion(LyricSearchResult song, LyricDocument document, string rawLrc, CancellationToken token)
@@ -224,31 +277,22 @@ namespace MusicBar
                     linked.CancelAfter(TimeSpan.FromSeconds(12));
                     try
                     {
-                        Dictionary<string, object> payload = new Dictionary<string, object>
-                        {
-                            { "comm", new Dictionary<string, object> { { "ct", 19 }, { "cv", 1859 }, { "uin", "0" } } },
-                            { "lyrics", new Dictionary<string, object>
-                            {
-                                { "module", "music.musichallSong.PlayLyricInfo" },
-                                { "method", "GetPlayLyricInfo" },
-                                { "param", new Dictionary<string, object>
-                                    { { "songMID", song.Id }, { "songID", 0 }, { "trans", 1 }, { "roma", 0 }, { "qrc", 1 }, { "crypt", 0 }, { "type", 0 } }
-                                }
-                            } }
-                        };
-                        string data = new JavaScriptSerializer().Serialize(payload);
-                        string url = "https://u.y.qq.com/cgi-bin/musicu.fcg?format=json&data=" + Uri.EscapeDataString(data);
-                        IDictionary<string, object> response = await GetJsonAsync(MusicPlayer.QQMusic, url, linked.Token).ConfigureAwait(false);
-                        RequireCode(response, 0, MusicPlayer.QQMusic);
-                        IDictionary<string, object> lyrics = Child(response, "lyrics");
-                        RequireCode(lyrics, 0, MusicPlayer.QQMusic);
-                        IDictionary<string, object> body = Child(lyrics, "data");
-                        if (body == null) throw new InvalidOperationException("QQ 音乐译文接口的数据格式已变化。");
+                        IDictionary<string, object> body = await ReadQQWordBodyAsync(song, linked.Token).ConfigureAwait(false);
                         string translation = DecodeQQ(StringValue(body, "trans"));
                         if (document.HasTranslation) translation = document.Translation;
                         LyricDocument prepared = CreateDocument(rawLrc, translation, document.Source);
                         prepared.TranslationSource = document.HasTranslation ? document.TranslationSource : string.IsNullOrWhiteSpace(translation) ? "" : "QQ 音乐 · 平台译文";
-                        prepared.WordTiming = DecodeQQ(StringValue(body, "lyric"));
+                        prepared.WordTiming = DecodeQQWordLyrics(StringValue(body, "lyric"));
+                        if (!prepared.HasTimedLyrics)
+                        {
+                            LyricDocument timed = LrcParser.ParseWordTiming(prepared.WordTiming);
+                            if (timed.HasTimedLyrics)
+                            {
+                                timed.Source = prepared.Source; timed.Translation = prepared.Translation;
+                                timed.TranslationSource = prepared.TranslationSource; timed.WordTiming = prepared.WordTiming;
+                                prepared = timed; LrcParser.EnsureTranslation(prepared);
+                            }
+                        }
                         prepared.TranslationWordTiming = translation;
                         prepared.WordTimingChecked = true;
                         LrcParser.ApplyWordTiming(prepared, prepared.WordTiming, false);
@@ -1014,6 +1058,17 @@ namespace MusicBar
                 document.TranslationWordTiming = translatedWords == null ? "" : translatedWords.InnerText;
                 XmlNode wordsChecked = root.SelectSingleNode("wordTimingChecked");
                 document.WordTimingChecked = wordsChecked != null && wordsChecked.InnerText == "true";
+                if (song.Player == MusicPlayer.QQMusic && !document.HasTimedLyrics && !string.IsNullOrWhiteSpace(document.WordTiming))
+                {
+                    LyricDocument timed = LrcParser.ParseWordTiming(document.WordTiming);
+                    if (timed.HasTimedLyrics)
+                    {
+                        timed.Source = document.Source; timed.WordTiming = document.WordTiming;
+                        timed.WordTimingChecked = document.WordTimingChecked; timed.Translation = document.Translation;
+                        timed.TranslationWordTiming = document.TranslationWordTiming;
+                        document = timed;
+                    }
+                }
                 LrcParser.ApplyWordTiming(document, document.WordTiming, false);
                 XmlNode translationSource = root.SelectSingleNode("translationSource");
                 if (translationSource != null) document.TranslationSource = translationSource.InnerText;

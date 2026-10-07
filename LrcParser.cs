@@ -150,9 +150,9 @@ namespace MusicBar
             return Math.Max(0, Math.Min(1, characters / line.Text.Length));
         }
 
-        public static int ApplyWordTiming(LyricDocument document, string raw, bool translation)
+        internal static LyricDocument ParseWordTiming(string raw)
         {
-            if (document == null || string.IsNullOrWhiteSpace(raw) || raw.Length > 2 * 1024 * 1024) return 0;
+            if (string.IsNullOrWhiteSpace(raw) || raw.Length > 2 * 1024 * 1024) return new LyricDocument();
             if (raw.TrimStart().StartsWith("<", StringComparison.Ordinal))
             {
                 try
@@ -160,16 +160,16 @@ namespace MusicBar
                     var xml = new XmlDocument { XmlResolver = null };
                     using (var reader = XmlReader.Create(new StringReader(raw), new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null, MaxCharactersInDocument = 2 * 1024 * 1024 })) xml.Load(reader);
                     XmlElement element = xml.SelectSingleNode("//*[@LyricContent]") as XmlElement;
-                    if (element == null) return 0;
+                    if (element == null) return new LyricDocument();
                     raw = element.GetAttribute("LyricContent");
                 }
-                catch (XmlException) { return 0; }
+                catch (XmlException) { return new LyricDocument(); }
             }
             LyricDocument timed = Parse(raw);
             raw = Regex.Replace(raw, @"(?=\[\d+,\d+\])", "\n");
             foreach (string row in raw.Replace("\r\n", "\n").Split('\n'))
             {
-                Match header = Regex.Match(row, @"\A\[(?<start>\d+),(?<duration>\d+)\](?<body>.*)\z", RegexOptions.CultureInvariant);
+                Match header = Regex.Match(row.Trim(), @"\A\[(?<start>\d+),(?<duration>\d+)\](?<body>.*)\z", RegexOptions.CultureInvariant);
                 if (!header.Success) continue;
                 double start, duration;
                 if (!double.TryParse(header.Groups["start"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out start) ||
@@ -192,6 +192,17 @@ namespace MusicBar
                 if (covered == body.Length && words.Count > 0)
                     timed.Lines.Add(new LyricLine(start / 1000, text) { EndSeconds = (start + duration) / 1000, Words = words });
             }
+            timed.Lines.Sort(delegate(LyricLine a, LyricLine b) { return a.Seconds.CompareTo(b.Seconds); });
+            var plain = new List<string>();
+            foreach (LyricLine line in timed.Lines) if (!IsNonVocalCue(line.Text)) plain.Add(line.Text);
+            timed.PlainText = string.Join(Environment.NewLine, plain);
+            return timed;
+        }
+
+        public static int ApplyWordTiming(LyricDocument document, string raw, bool translation)
+        {
+            if (document == null) return 0;
+            LyricDocument timed = ParseWordTiming(raw);
             List<LyricLine> targets = translation ? document.TranslationLines : document.Lines;
             if (targets == null) return 0;
             int applied = 0;
