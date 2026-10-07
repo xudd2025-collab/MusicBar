@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing version tag (v1.0.20)
+        description: Existing version tag (v1.0.21)
         required: true
 permissions:
   contents: write
@@ -38,9 +38,10 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           $manifest = Get-Content dist/update.json -Raw | ConvertFrom-Json
+          $manifest.notes | Set-Content dist/release-notes.md -Encoding utf8
           gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY 2>$null
           if ($LASTEXITCODE -ne 0) {
-            gh release create $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --verify-tag --title "MusicBar $($manifest.version)" --notes-file CHANGELOG.md "dist/$($manifest.installer.name)" "dist/MusicBar-Portable-$($manifest.version).zip" dist/SHA256SUMS.txt
+            gh release create $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --verify-tag --title "MusicBar $($manifest.version)" --notes-file dist/release-notes.md "dist/$($manifest.installer.name)" "dist/MusicBar-Portable-$($manifest.version).zip" dist/SHA256SUMS.txt
             if ($LASTEXITCODE -ne 0) { throw 'Release publication failed.' }
           } else {
             gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --pattern $manifest.installer.name --clobber --dir dist
