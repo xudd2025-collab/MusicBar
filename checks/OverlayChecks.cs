@@ -11,6 +11,39 @@ namespace MusicBar
     {
         private static int _checks;
 
+        private static void CharacterLimitRendering()
+        {
+            using (var overlay = new LyricOverlay())
+            {
+                var settings = new AppSettings { AuthorWatermarkDismissed = true, OverlayEnabled = false, ShowTranslation = true, MaxCharactersPerLine = 3, KaraokeEnabled = false };
+                overlay.UpdateSettings(settings);
+                overlay.SetLyrics("一二三四五六七八九十", "下一行较长歌词", "甲乙丙丁戊己庚辛", true);
+                overlay.SetLineTiming("character-limit", 10, false);
+                overlay.SetKaraokeProgress(.45, .65);
+                using (var bitmap = CurrentBitmap(overlay, 420, 72))
+                {
+                    Check((string)PrivateField(PrivateField(overlay, "_currentLine"), "_text") == "三四五", "The rendered original obeys the paired character limit independently of karaoke coloring.");
+                    Check((string)PrivateField(PrivateField(overlay, "_secondLine"), "_text") == "丙丁", "Different-length original and translation display the same paired page.");
+                    SaveDark(bitmap, "overlay-character-limit.png");
+                }
+                overlay.SetKaraokeProgress(.45, .05);
+                using (var bitmap = CurrentBitmap(overlay, 420, 72))
+                    Check((string)PrivateField(PrivateField(overlay, "_secondLine"), "_text") == "丙丁", "Changing translated progress cannot advance its displayed page independently.");
+                overlay.SetKaraokeProgress(.05, .05);
+                using (var bitmap = CurrentBitmap(overlay, 420, 72))
+                    Check((string)PrivateField(PrivateField(overlay, "_currentLine"), "_text") == "一二" &&
+                        (string)PrivateField(PrivateField(overlay, "_secondLine"), "_text") == "甲乙", "Seeking backward updates both displayed rows without modifying source lyrics.");
+                settings.MaxCharactersPerLine = 0; overlay.UpdateSettings(settings);
+                using (var bitmap = CurrentBitmap(overlay, 420, 72))
+                    Check((string)PrivateField(PrivateField(overlay, "_currentLine"), "_text") == "一二三四五六七八九十", "Turning off the limit restores the complete original lyric.");
+                settings.MaxCharactersPerLine = 3; overlay.UpdateSettings(settings);
+                overlay.SetLineTiming("", double.NaN, false);
+                overlay.SetLyrics("Ref:rain · Aimer (エメ)", "", "", true);
+                using (var bitmap = CurrentBitmap(overlay, 420, 72))
+                    Check((string)PrivateField(PrivateField(overlay, "_currentLine"), "_text") == "Ref:rain · Aimer (エメ)", "Song information remains complete while lyrics are unavailable.");
+            }
+        }
+
         [STAThread]
         public static int Main(string[] arguments)
         {
@@ -31,7 +64,8 @@ namespace MusicBar
 
         internal static void Run(bool includeMouseChecks = true, bool includeAnimationChecks = true)
         {
-            AppSettings settings = new AppSettings();
+            CharacterLimitRendering();
+            AppSettings settings = new AppSettings { AuthorWatermarkDismissed = true };
             TaskbarSnapshot bar = BottomBar(1920, 1080, 48, 1);
             List<Rectangle> controls = new List<Rectangle>
             {
@@ -98,6 +132,9 @@ namespace MusicBar
             OverlayLayout floating = TaskbarGeometry.Calculate(bar, settings, controls);
             Check(floating.Bounds.Bottom <= bar.Bounds.Top && bar.MonitorBounds.Contains(floating.Bounds), "The explicit floating mode must remain above a bottom taskbar.");
             VerifyPreview();
+            VerifyGradientRendering();
+            VerifyGradientScrollRendering();
+            VerifyAuthorWatermarkRendering();
             VerifyScrollState();
             VerifyLongLineRendering();
             if (includeAnimationChecks) VerifyAnimationScheduler();
@@ -176,7 +213,7 @@ namespace MusicBar
             IntPtr foreground = OverlayNative.GetForegroundWindow();
             using (LyricOverlay overlay = new LyricOverlay())
             {
-                AppSettings settings = new AppSettings { OverlayEnabled = false, FontSize = 18 };
+                AppSettings settings = new AppSettings { AuthorWatermarkDismissed = true, OverlayEnabled = false, FontSize = 18 };
                 overlay.UpdateSettings(settings);
                 overlay.SetLineTiming("timer|0", 1.6, true);
                 const string lyric = "真实计时滚动 · 这是一句足够长的歌词，开头、中间和最后的文字都需要显示出来 · 完整结尾";
@@ -288,7 +325,7 @@ namespace MusicBar
             const string translation = "START · When the wind crosses this long road, every word stays with you until the complete ending · FINAL WORDS";
             using (LyricOverlay overlay = new LyricOverlay())
             {
-                AppSettings settings = new AppSettings { OverlayEnabled = false, TwoLines = false, ShowTranslation = true, LongLineScroll = true, FontSize = 18 };
+                AppSettings settings = new AppSettings { AuthorWatermarkDismissed = true, OverlayEnabled = false, TwoLines = false, ShowTranslation = true, LongLineScroll = true, FontSize = 18 };
                 overlay.UpdateSettings(settings);
                 overlay.SetLineTiming("track|0", 8, true);
                 overlay.SetLyrics(original, "下一句不应代替译文", translation, true);
@@ -408,7 +445,7 @@ namespace MusicBar
 
         private static void VerifyDirectionalOffsets(TaskbarSnapshot bar, List<Rectangle> controls)
         {
-            AppSettings settings = new AppSettings();
+            AppSettings settings = new AppSettings { AuthorWatermarkDismissed = true };
             int previous = int.MinValue;
             foreach (int offset in new int[] { 0, 5, 50, 100, 200, 420, 424, 425, 430, 500, 679 })
             {
@@ -487,7 +524,7 @@ namespace MusicBar
             {
                 TaskbarSnapshot bar = OffscreenBar(true);
                 List<Rectangle> controls = OffscreenControls(bar);
-                AppSettings settings = new AppSettings { OverlayEnabled = false, ClickThrough = false };
+                AppSettings settings = new AppSettings { AuthorWatermarkDismissed = true, OverlayEnabled = false, ClickThrough = false };
                 int changed = 0, completed = 0;
                 OverlayPositionChangedEventArgs last = null;
                 overlay.PositionChanged += delegate(object sender, OverlayPositionChangedEventArgs args) { changed++; last = args; };
@@ -535,7 +572,7 @@ namespace MusicBar
             {
                 TaskbarSnapshot bar = OffscreenBar(right);
                 List<Rectangle> controls = OffscreenControls(bar);
-                AppSettings settings = new AppSettings { OverlayEnabled = false, ClickThrough = false, HorizontalOffset = 300 };
+                AppSettings settings = new AppSettings { AuthorWatermarkDismissed = true, OverlayEnabled = false, ClickThrough = false, HorizontalOffset = 300 };
                 int saved = 0;
                 overlay.PositionChanged += delegate { saved++; };
                 PrepareWindow(overlay, bar, controls, settings);
@@ -551,13 +588,197 @@ namespace MusicBar
             }
         }
 
+        private static int VisiblePixelCount(Bitmap bitmap, Rectangle area)
+        {
+            int count = 0;
+            for (int y = area.Top; y < area.Bottom; y++) for (int x = area.Left; x < area.Right; x++)
+                if (bitmap.GetPixel(x, y).A > 0) count++;
+            return count;
+        }
+
+        private static void VerifyAuthorWatermarkRendering()
+        {
+            foreach (int width in new[] { 180, 420 })
+            foreach (bool translated in new[] { false, true })
+            using (var overlay = new LyricOverlay())
+            {
+                var settings = new AppSettings { OverlayEnabled = false, ShowTranslation = translated, LyricBrightness = 100,
+                    TextColor = "#FF3030", ActiveColor = "#FF3030", TranslationColor = "#3030FF", TranslationActiveColor = "#3030FF" };
+                Check(!settings.AuthorWatermarkDismissed, "Fresh settings display the author watermark.");
+                overlay.UpdateSettings(settings);
+                overlay.SetLyrics(new string('M', 60), "", translated ? new string('M', 50) : "", true);
+                overlay.SetLineTiming("author-watermark|0", 10, false);
+                overlay.SetKaraokeProgress(.2, .2);
+                float innerWidth = width - 8;
+                float watermarkWidth = Math.Min(160, innerWidth * .35f);
+                float watermarkLeft = width - 4 - watermarkWidth;
+                Rectangle watermarkArea = new Rectangle((int)Math.Ceiling(watermarkLeft), 2,
+                    width - 4 - (int)Math.Ceiling(watermarkLeft), 44);
+                using (Bitmap before = CurrentBitmap(overlay, width, 48))
+                {
+                    float lyricWidth = (float)PrivateField(PrivateField(overlay, "_currentLine"), "_width");
+                    Check(4 + lyricWidth < watermarkLeft && lyricWidth > innerWidth * .6f,
+                        "The watermark reserves a separate right block while keeping most width for the lyric.");
+                    if (translated)
+                        Check((float)PrivateField(PrivateField(overlay, "_secondLine"), "_width") == lyricWidth,
+                            "Original and translated lyrics share the same safe width beside the author block.");
+                    Rectangle gap = new Rectangle((int)Math.Ceiling(4 + lyricWidth), 2,
+                        Math.Max(0, (int)Math.Floor(watermarkLeft) - (int)Math.Ceiling(4 + lyricWidth)), 44);
+                    Check(VisiblePixelCount(before, gap) == 0, "Neither lyric row nor author text paints over the space separating them.");
+                    int authorPixels = VisiblePixelCount(before, watermarkArea);
+                    int vividPixels = 0;
+                    for (int y = watermarkArea.Top; y < watermarkArea.Bottom; y++)
+                        for (int x = watermarkArea.Left; x < watermarkArea.Right; x++)
+                        {
+                            Color pixel = before.GetPixel(x, y);
+                            if (pixel.A > 160 && (pixel.R > pixel.G + 70 || pixel.B > pixel.G + 70)) vividPixels++;
+                        }
+                    Check(authorPixels > 40 && vividPixels == 0, "The author mark is visible in neutral colors without either lyric row bleeding into it.");
+                    CheckMargins(before); SaveDark(before, "overlay-author-" + width + (translated ? "-bilingual.png" : "-single.png"));
+                    settings.LyricBrightness = 160; settings.ActiveColor = "#30FF30"; settings.TranslationActiveColor = "#FF30FF";
+                    overlay.UpdateSettings(settings); overlay.SetKaraokeProgress(.8, .7);
+                    using (Bitmap progressChanged = CurrentBitmap(overlay, width, 48))
+                        Check(PixelDifference(before, progressChanged, watermarkArea) == 0,
+                            "Author colors and position remain fixed when lyric palette, brightness and karaoke progress change.");
+                    LyricScrollState scroll = ScrollFor(overlay, "_currentLine");
+                    double maximum = scroll.MaximumOffset;
+                    scroll.Reset(0); scroll.Configure(maximum, 40, 0); scroll.Advance(1.5, double.NaN);
+                    using (Bitmap scrolled = CurrentBitmap(overlay, width, 48))
+                        Check(PixelDifference(before, scrolled, watermarkArea) == 0, "Scrolling the lyric leaves the author watermark stationary.");
+                    settings.AuthorWatermarkDismissed = true; overlay.UpdateSettings(settings);
+                    using (Bitmap dismissed = CurrentBitmap(overlay, width, 48))
+                        Check(ScrollFor(overlay, "_currentLine").MaximumOffset < maximum - watermarkWidth,
+                            "Permanently dismissing the mark immediately restores its reserved width to the lyrics.");
+                }
+                overlay.SetLyrics("", "", "", false);
+                using (Bitmap dismissedEmpty = CurrentBitmap(overlay, width, 48))
+                    Check(VisiblePixelCount(dismissedEmpty, new Rectangle(0, 0, width, 48)) == 0,
+                        "A dismissed author mark leaves no pixels or rectangular background behind.");
+            }
+            using (var overlay = new LyricOverlay())
+            {
+                var settings = new AppSettings { OverlayEnabled = false };
+                overlay.UpdateSettings(settings);
+                using (Bitmap enabled = overlay.RenderPreview(420, 48))
+                {
+                    settings.AuthorWatermarkDismissed = true; overlay.UpdateSettings(settings);
+                    using (Bitmap dismissed = overlay.RenderPreview(420, 48))
+                        Check(PixelDifference(enabled, dismissed, new Rectangle(270, 2, 146, 44)) > 100,
+                            "The settings preview reflects the author watermark and its persistent dismissal.");
+                }
+            }
+        }
+
+        private static void VerifyGradientRendering()
+        {
+            using (var overlay = new LyricOverlay())
+            {
+                var settings = new AppSettings { AuthorWatermarkDismissed = true, OverlayEnabled = false, ShowTranslation = true, LongLineScroll = false,
+                    LyricBrightness = 100, TextColor = "#C5C5C5", TranslationColor = "#A5A5A5",
+                    ActiveColor = "#E84D66", GradientEndColor = "#4A84E8",
+                    TranslationActiveColor = "#45D49B", TranslationGradientEndColor = "#C78AEF" };
+                overlay.UpdateSettings(settings);
+                overlay.SetLyrics("MMMMMMMMMMMMMM", "", "MMMMMMMMMMMMMM", true);
+                overlay.SetLineTiming("gradient|0", 10, false);
+                using (Bitmap solidUnsung = CurrentBitmap(overlay, 600, 72))
+                {
+                    settings.ColorMode = "gradient"; overlay.UpdateSettings(settings);
+                    using (Bitmap gradientUnsung = CurrentBitmap(overlay, 600, 72))
+                        Check(PixelDifference(solidUnsung, gradientUnsung, new Rectangle(0, 0, 600, 72)) == 0,
+                            "Enabling gradients retains both neutral unsung colors before playback reaches the words.");
+                }
+                overlay.SetKaraokeProgress(.35, .35);
+                using (Bitmap firstProgress = CurrentBitmap(overlay, 600, 72))
+                {
+                    int stableWidth = (int)(((SizeF)PrivateField(PrivateField(overlay, "_currentLine"), "_glyphSize")).Width * .25);
+                    overlay.SetKaraokeProgress(.75, .75);
+                    using (Bitmap laterProgress = CurrentBitmap(overlay, 600, 72))
+                    {
+                        Check(PixelDifference(firstProgress, laterProgress, new Rectangle(0, 0, stableWidth, 72)) == 0,
+                            "Advancing karaoke keeps the colors of previously sung glyphs fixed to the complete lyric path.");
+                        Check(PixelDifference(firstProgress, laterProgress, new Rectangle(0, 0, 600, 36)) > 100 &&
+                            PixelDifference(firstProgress, laterProgress, new Rectangle(0, 36, 600, 36)) > 100,
+                            "Karaoke advances the gradient highlight in both original and translation.");
+                        settings.GradientEndColor = "#F5C869"; overlay.UpdateSettings(settings);
+                        using (Bitmap changedOriginal = CurrentBitmap(overlay, 600, 72))
+                        {
+                            Check(PixelDifference(laterProgress, changedOriginal, new Rectangle(0, 0, 600, 36)) > 100,
+                                "Changing the original gradient endpoint repaints the current original immediately.");
+                            Check(PixelDifference(laterProgress, changedOriginal, new Rectangle(0, 36, 600, 36)) == 0,
+                                "Changing the original gradient endpoint preserves the translated gradient.");
+                            settings.TranslationGradientEndColor = "#F58B69"; overlay.UpdateSettings(settings);
+                            using (Bitmap changedTranslation = CurrentBitmap(overlay, 600, 72))
+                            {
+                                Check(PixelDifference(changedOriginal, changedTranslation, new Rectangle(0, 36, 600, 36)) > 100,
+                                    "Changing the translation gradient endpoint repaints its current line immediately.");
+                                Check(PixelDifference(changedOriginal, changedTranslation, new Rectangle(0, 0, 600, 36)) == 0,
+                                    "Changing the translation gradient endpoint preserves the original gradient.");
+                                CheckMargins(changedTranslation); SaveDark(changedTranslation, "overlay-gradient-karaoke.png");
+                            }
+                        }
+                    }
+                }
+                Check((double)PrivateField(overlay, "_originalProgress") == .75 && (double)PrivateField(overlay, "_translationProgress") == .75,
+                    "Gradient edits preserve paused karaoke progress.");
+                settings.KaraokeEnabled = false; overlay.UpdateSettings(settings);
+                using (Bitmap staticGradient = CurrentBitmap(overlay, 600, 72))
+                {
+                    overlay.SetKaraokeProgress(.1, .2);
+                    settings.TextColor = "#333333"; settings.TranslationColor = "#555555"; overlay.UpdateSettings(settings);
+                    using (Bitmap sameStaticGradient = CurrentBitmap(overlay, 600, 72))
+                        Check(PixelDifference(staticGradient, sameStaticGradient, new Rectangle(0, 0, 600, 72)) == 0,
+                            "With karaoke disabled the whole lyric uses a stationary gradient independent of progress and unsung colors.");
+                    settings.LyricBrightness = 60; overlay.UpdateSettings(settings);
+                    using (Bitmap dimmed = CurrentBitmap(overlay, 600, 72))
+                        Check(PixelDifference(staticGradient, dimmed, new Rectangle(0, 0, 600, 36)) > 100 &&
+                            PixelDifference(staticGradient, dimmed, new Rectangle(0, 36, 600, 36)) > 100,
+                            "Brightness applies to both complete gradient rows.");
+                }
+                using (Bitmap gradientPreview = overlay.RenderPreview(600, 72))
+                {
+                    CheckMargins(gradientPreview); SaveDark(gradientPreview, "overlay-gradient-static.png");
+                    settings.ColorMode = "solid"; overlay.UpdateSettings(settings);
+                    using (Bitmap solidPreview = overlay.RenderPreview(600, 72))
+                        Check(PixelDifference(gradientPreview, solidPreview, new Rectangle(0, 0, 600, 36)) > 100 &&
+                            PixelDifference(gradientPreview, solidPreview, new Rectangle(0, 36, 600, 36)) > 100,
+                            "The settings preview uses the same switchable gradients as current lyrics.");
+                }
+            }
+        }
+
+        private static void VerifyGradientScrollRendering()
+        {
+            using (var overlay = new LyricOverlay())
+            {
+                overlay.UpdateSettings(new AppSettings { AuthorWatermarkDismissed = true, OverlayEnabled = false, ShowTranslation = false, LongLineScroll = true,
+                    ColorMode = "gradient", KaraokeEnabled = false, ActiveColor = "#E84D66", GradientEndColor = "#4A84E8" });
+                overlay.SetLyrics(new string('M', 60), "", "", true);
+                overlay.SetLineTiming("gradient-scroll|0", double.NaN, false);
+                using (Bitmap beforeScroll = CurrentBitmap(overlay, 240, 60))
+                {
+                    LyricScrollState scroll = ScrollFor(overlay, "_currentLine");
+                    double maximum = scroll.MaximumOffset;
+                    scroll.Reset(0); scroll.Configure(maximum, 40, 0); scroll.Advance(1.5, double.NaN);
+                    using (Bitmap afterScroll = CurrentBitmap(overlay, 240, 60))
+                    {
+                        Check(Math.Abs((double)PrivateField(PrivateField(overlay, "_currentLine"), "PaintedOffset") - 40) < .001,
+                            "A long gradient lyric uses the existing scroll position.");
+                        int changed = 0;
+                        for (int y = 2; y < 58; y++) for (int x = 8; x < 192; x++)
+                            if (beforeScroll.GetPixel(x + 40, y).ToArgb() != afterScroll.GetPixel(x, y).ToArgb()) changed++;
+                        Check(changed == 0, "Scrolled glyphs keep their sentence-anchored gradient colors instead of adopting the viewport's colors.");
+                    }
+                }
+            }
+        }
+
         private static void VerifyPreview()
         {
             bool hasDengXian = false;
             try { using (var font = new FontFamily("等线")) hasDengXian = true; } catch (ArgumentException) { }
             using (LyricOverlay overlay = new LyricOverlay())
             {
-                var settings = new AppSettings { OverlayEnabled = false, FontFamily = "Mistral", FontSize = 16, BoldLyrics = false };
+                var settings = new AppSettings { AuthorWatermarkDismissed = true, OverlayEnabled = false, FontFamily = "Mistral", FontSize = 16, BoldLyrics = false };
                 overlay.UpdateSettings(settings); overlay.SetLyrics("Flowers beside your window", "", "就不会开在你的窗前", true); overlay.SetLineTiming("font|0", 10, false); overlay.SetKaraokeProgress(.3, .3);
                 using (Bitmap latinAndChinese = CurrentBitmap(overlay, 600, 72))
                 {
@@ -577,7 +798,7 @@ namespace MusicBar
             if (!hasDengXian) Console.WriteLine("Font shape comparison omitted: DengXian is not installed; fallback rendering remains checked.");
             using (LyricOverlay overlay = new LyricOverlay())
             {
-                var settings = new AppSettings { OverlayEnabled = false, LyricBrightness = 145, TextColor = "#F9FDF7", TranslationColor = "#F8FCF8", ActiveColor = "#3D45EB", TranslationActiveColor = "#3D45EB" };
+                var settings = new AppSettings { AuthorWatermarkDismissed = true, OverlayEnabled = false, LyricBrightness = 145, TextColor = "#F9FDF7", TranslationColor = "#F8FCF8", ActiveColor = "#3D45EB", TranslationActiveColor = "#3D45EB" };
                 overlay.UpdateSettings(settings); overlay.SetLyrics("就不会开在你的窗前", "", "The flowers beside your window", true); overlay.SetLineTiming("palette|0", 10, false); overlay.SetKaraokeProgress(.3, .3);
                 using (Bitmap before = CurrentBitmap(overlay, 600, 72))
                 {
@@ -605,7 +826,7 @@ namespace MusicBar
             foreach (string fontName in new[] { "Microsoft YaHei UI", "等线" })
             using (LyricOverlay overlay = new LyricOverlay())
             {
-                overlay.UpdateSettings(new AppSettings { OverlayEnabled = false, FontFamily = fontName, FontSize = 16, BoldLyrics = fontName == "Microsoft YaHei UI" });
+                overlay.UpdateSettings(new AppSettings { AuthorWatermarkDismissed = true, OverlayEnabled = false, FontFamily = fontName, FontSize = 16, BoldLyrics = fontName == "Microsoft YaHei UI" });
                 using (Bitmap preview = overlay.RenderPreview(410, 48)) { CheckMargins(preview); SaveDark(preview, fontName == "等线" ? "overlay-font-light.png" : "overlay-font-clear.png"); }
             }
             using (var panel = new Panel { Width = 720, Height = 148, BackColor = Theme.Surface })
@@ -618,7 +839,7 @@ namespace MusicBar
             }
             using (LyricOverlay overlay = new LyricOverlay())
             {
-                overlay.UpdateSettings(new AppSettings { OverlayEnabled = false, KaraokeEnabled = true, LyricBrightness = 100,
+                overlay.UpdateSettings(new AppSettings { AuthorWatermarkDismissed = true, OverlayEnabled = false, KaraokeEnabled = true, LyricBrightness = 100,
                     ActiveColor = "#FF4433", TextColor = "#5484D1", TranslationColor = "#44CC66", TranslationActiveColor = "#CC44CC" });
                 overlay.SetLyrics("Hello beautiful world", "", "你好，美丽的世界", true);
                 overlay.SetLineTiming("karaoke|0", 10, true);
@@ -649,7 +870,7 @@ namespace MusicBar
             }
             using (LyricOverlay overlay = new LyricOverlay())
             {
-                overlay.UpdateSettings(new AppSettings { OverlayEnabled = false, FontFamily = "細明體-ExtB", FontSize = 19, ShowTranslation = true });
+                overlay.UpdateSettings(new AppSettings { AuthorWatermarkDismissed = true, OverlayEnabled = false, FontFamily = "細明體-ExtB", FontSize = 19, ShowTranslation = true });
                 overlay.SetLyrics("Burn it all", "", "焚尽旧章", true);
                 using (Bitmap taskbarCaption = CurrentBitmap(overlay, 410, 48))
                 {
@@ -662,7 +883,7 @@ namespace MusicBar
             }
             using (LyricOverlay overlay = new LyricOverlay())
             {
-                AppSettings settings = new AppSettings { OverlayEnabled = false, ActiveColor = "#FF4433", TextColor = "#5484D1", TwoLines = true, FontSize = 18 };
+                AppSettings settings = new AppSettings { AuthorWatermarkDismissed = true, OverlayEnabled = false, ActiveColor = "#FF4433", TextColor = "#5484D1", TwoLines = true, FontSize = 18 };
                 overlay.UpdateSettings(settings);
                 using (Bitmap preview = overlay.RenderPreview(420, 60))
                 {

@@ -11,7 +11,20 @@ internal static class NetEaseBridgeChecks
     static int passed;
     static void Check(bool ok,string msg){if(!ok)throw new Exception(msg);passed++;}
     static IDictionary<string,object> Sample(double p,double d,string state){return new Dictionary<string,object>{{"id","123"},{"title","Song"},{"artist","Artist"},{"album","Album"},{"position",p},{"duration",d},{"state",state}};}
-    public static void Main()
+    static string stage = "native metadata";
+    [STAThread]
+    public static int Main()
+    {
+        try { Run(); return 0; }
+        catch (Exception error)
+        {
+            Console.Error.WriteLine("NetEase bridge checks failed at " + stage);
+            try { Console.Error.WriteLine(error.GetType().FullName + " (0x" + error.HResult.ToString("X8") + "): " + error.Message); }
+            catch { Console.Error.WriteLine("Exception details unavailable."); }
+            return 1;
+        }
+    }
+    static void Run()
     {
         var now=DateTime.UtcNow;var s=NetEaseBridgeReader.ParseSample(Sample(43.123,200.456,"Playing"),now.AddSeconds(-5));
         Check(s!=null&&s.HasTimeline&&s.IsPlaying&&s.Title=="Song"&&s.Artist=="Artist"&&s.Album=="Album","metadata and native clock");
@@ -40,11 +53,11 @@ internal static class NetEaseBridgeChecks
         Check(NetEaseBridgeReader.IsPlayerPage("orpheus://orpheus/pub/hybrid/index.html"),"NetEase app page accepted");
         Check(NetEaseBridgeReader.IsPlayerPage("orpheus://orpheus/pub/app.html"),"current installed app page accepted");
         Check(!NetEaseBridgeReader.IsPlayerPage("https://music.163.com/"),"web pages refused");
-        VerifyProgressClock(now);
-        VerifyBridgeInterruption(now);
-        VerifyLaunchArguments();
-        VerifyDirectLyrics().GetAwaiter().GetResult();
-        VerifyIntegrationRecovery();
+        stage="progress clock";VerifyProgressClock(now);
+        stage="bridge interruption";VerifyBridgeInterruption(now);
+        stage="launch arguments";VerifyLaunchArguments();
+        stage="direct native-ID lyrics";VerifyDirectLyrics().GetAwaiter().GetResult();
+        stage="integration recovery";VerifyIntegrationRecovery();
         Console.WriteLine("NetEase bridge checks passed: "+passed);
     }
     static void VerifyBridgeInterruption(DateTime now)

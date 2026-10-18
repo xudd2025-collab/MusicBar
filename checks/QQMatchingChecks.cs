@@ -28,7 +28,7 @@ internal static class QQMatchingChecks
     static LyricSearchResult Song(string id,string title,string album,double duration=261.013){return new LyricSearchResult{Player=MusicPlayer.NetEase,Id=id,Title=title,Artist="YOASOBI",Album=album,DurationSeconds=duration};}
     static bool Match(MusicSnapshot observed,params LyricSearchResult[] results){observed.Player=MusicPlayer.NetEase;return LyricRepository.SelectAutomaticMatch(observed,results,true)!=null;}
     [STAThread]
-    public static int Main(){try{QrcRecovery().GetAwaiter().GetResult();FastFormats().GetAwaiter().GetResult();Names();ArtistNames();DisplayFormats();ProviderDuration();ProviderDurationFallback().GetAwaiter().GetResult();Fallback().GetAwaiter().GetResult();AliasFallback().GetAwaiter().GetResult();CatalogFallback().GetAwaiter().GetResult();ParallelLoading().GetAwaiter().GetResult();ControllerRecovery();RefreshContinuity();LateInformationRecovery();Console.WriteLine("QQ matching/recovery checks passed: "+passed);return 0;}catch(Exception error){Console.Error.WriteLine(error);return 1;}}
+    public static int Main(){try{QrcRecovery().GetAwaiter().GetResult();FastFormats().GetAwaiter().GetResult();Names();ArtistNames();DisplayFormats();BilingualAlbums();BilingualAlbumFallback().GetAwaiter().GetResult();NativeCatalogUpgrade().GetAwaiter().GetResult();EarlyCatalogRecovery().GetAwaiter().GetResult();ProviderDuration();ProviderDurationFallback().GetAwaiter().GetResult();Fallback().GetAwaiter().GetResult();AliasFallback().GetAwaiter().GetResult();CatalogFallback().GetAwaiter().GetResult();ParallelLoading().GetAwaiter().GetResult();ControllerRecovery();NativeControllerSwap();RefreshContinuity();LateInformationRecovery();Console.WriteLine("QQ matching/recovery checks passed: "+passed);return 0;}catch(Exception error){Console.Error.WriteLine(error);return 1;}}
     // Synthetic independent format vector: no song lyrics are distributed.
     const string QrcFixture = "1d3c2506ec0f7d139922dfa218b5ba10d860ad14dceedd6479387ef6fa91204fc54ad42399f0555933949229b04385b65f930c69ae7c6444cd7fb4a360a43a5e0d071cc9a39910b86beebaa827dedea55601385cf8141f29a29a0175b3ccd90b6bac56b856c67b2fbffb5deaa99f3d906482253a34d28cec24abfa0fd0e3d5d865767215b257b0961c173ce41978773982bd8afb97bc3089";
     sealed class QrcHandler : HttpMessageHandler {
@@ -289,6 +289,228 @@ internal static class QQMatchingChecks
         Check(!Match(AkumaTrack(),AkumaSong(),wrong),"Several alias candidates stay ambiguous even when durations differ slightly");
         observed=AkumaTrack();observed.Player=MusicPlayer.NetEase;
         Check(LyricRepository.SelectAutomaticMatch(observed,new[]{AkumaSong()})==null,"QQ artist display conventions do not change native NetEase identity");
+    }
+    static MusicSnapshot RefrainTrack(){return new MusicSnapshot{Player=MusicPlayer.QQMusic,Title="Ref:rain",Artist="Aimer (エメ)",Album="ペニーレイン (Penny Rain)",DurationSeconds=289.986};}
+    static LyricSearchResult RefrainSong(string id="1357775677"){return new LyricSearchResult{Player=MusicPlayer.NetEase,Id=id,Title="Ref:rain",Artist="Aimer",Album="Penny Rain",DurationSeconds=289.986};}
+    static void BilingualAlbums(){
+        foreach(string album in new[]{"ペニーレイン (Penny Rain)","ペニーレイン（Penny Rain）","Penny Rain (ペニーレイン)"}){
+            var observed=RefrainTrack();observed.Album=album;
+            var correct=RefrainSong();var single=RefrainSong("536623501");single.Album="Ref:rain / 眩いばかり";
+            Check(LyricRepository.SelectAutomaticMatch(new MusicSnapshot{Player=MusicPlayer.NetEase,Title=observed.Title,Artist=observed.Artist,Album=album,DurationSeconds=observed.DurationSeconds},new[]{single,correct},true)==correct,"QQ bilingual album selects the album recording rather than the same-title single: "+album);
+        }
+        var wrong=RefrainSong();wrong.Album="Other Album";Check(!Match(RefrainTrack(),wrong),"Bilingual album cannot match a different album");
+        wrong=RefrainSong();wrong.Artist="Cover artist";Check(!Match(RefrainTrack(),wrong),"Bilingual album cannot match another performer");
+        wrong=RefrainSong();wrong.DurationSeconds=299;Check(!Match(RefrainTrack(),wrong),"Bilingual album cannot match the wrong duration");
+        wrong=RefrainSong();wrong.Title="Ref:rain -3 nuits ver.-";Check(!Match(RefrainTrack(),wrong),"Bilingual album preserves recording-version words");
+        Check(!Match(RefrainTrack(),RefrainSong(),RefrainSong("2")),"Several same-album recordings remain ambiguous");
+        var incomplete=RefrainTrack();incomplete.DurationSeconds=0;Check(!Match(incomplete,RefrainSong()),"Bilingual display compensation requires measured duration");
+        incomplete=RefrainTrack();incomplete.Artist="";Check(!Match(incomplete,RefrainSong()),"Bilingual display compensation requires performer identity");
+        var native=RefrainTrack();native.Player=MusicPlayer.NetEase;Check(LyricRepository.SelectAutomaticMatch(native,new[]{RefrainSong()})==null,"Native NetEase matching does not inherit QQ bilingual display conventions");
+        foreach(string label in new[]{"Live","TV size","Deluxe","Limited Edition","ライブ","リミックス","初回限定盤"}){
+            var observed=RefrainTrack();observed.Artist="Aimer";observed.Album="ペニーレイン ("+label+")";
+            var candidate=RefrainSong();candidate.Album="ペニーレイン";
+            Check(!Match(observed,candidate),"Album edition qualifier is never stripped: "+label);
+            observed=RefrainTrack();observed.Album="ペニーレイン (Penny Rain "+label+")";
+            candidate=RefrainSong();candidate.Album="Penny Rain "+label;
+            Check(!Match(observed,candidate),"A bracketed edition label is not accepted as a translation: "+label);
+        }
+    }
+    sealed class BilingualAlbumHandler:HttpMessageHandler{
+        internal int Calls;
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken token){
+            token.ThrowIfCancellationRequested();Calls++;string body;
+            if(request.RequestUri.Host=="u.y.qq.com")body="{\"code\":0,\"request\":{\"code\":2001}}";
+            else if(request.RequestUri.AbsolutePath=="/api/search/get/web"){
+                Check(Uri.UnescapeDataString(request.RequestUri.Query).Contains("Ref:rain Aimer"),"Bilingual lookup searches the undecorated canonical artist");
+                body=new JavaScriptSerializer().Serialize(new{code=200,result=new{songs=new[]{new{id=536623501,name="Ref:rain",duration=290202,artists=new[]{new{name="Aimer"}},album=new{name="Ref:rain / 眩いばかり"}},new{id=1357775677,name="Ref:rain",duration=289986,artists=new[]{new{name="Aimer"}},album=new{name="Penny Rain"}}}}});
+            }else if(request.RequestUri.AbsolutePath=="/api/song/lyric"){
+                Check(request.RequestUri.Query.Contains("id=1357775677"),"Bilingual fallback fetches the exact album recording ID");
+                body="{\"code\":200,\"lrc\":{\"lyric\":\"[00:01]Original line\\n[00:03]Next line\"},\"tlyric\":{\"lyric\":\"[00:01]测试译文\\n[00:03]下一句\"}}";
+            }else throw new Exception("Unexpected bilingual album endpoint");
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK){Content=new StringContent(body,Encoding.UTF8,"application/json")});
+        }
+    }
+    static async Task BilingualAlbumFallback(){
+        string directory=Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"qq-bilingual-album-"+Guid.NewGuid().ToString("N"));
+        try{
+            var handler=new BilingualAlbumHandler();
+            using(var repository=new LyricRepository(directory,handler)){
+                var document=await repository.FindAsync(RefrainTrack(),CancellationToken.None);
+                Check(document!=null&&document.HasTimedLyrics&&document.HasTranslation&&handler.Calls==3,"QQ 2001 recovers timed original and translation for bilingual album metadata");
+            }
+            handler=new BilingualAlbumHandler();
+            using(var repository=new LyricRepository(directory,handler)){
+                var document=await repository.FindAsync(RefrainTrack(),CancellationToken.None);
+                Check(document!=null&&document.HasTimedLyrics&&document.Source.Contains("缓存")&&handler.Calls==0,"Bilingual recording identity survives restart and reuses cache without search");
+            }
+        }finally{DeleteTemporaryDirectory(directory);}
+    }
+    sealed class NativeCatalogHandler:HttpMessageHandler{
+        internal int Calls, NativeCalls;
+        internal bool Ambiguous, WrongAlbum, SlowSuggestions;
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken token){
+            token.ThrowIfCancellationRequested();Interlocked.Increment(ref Calls);string body;
+            string query=Uri.UnescapeDataString(request.RequestUri.Query);
+            if(request.RequestUri.AbsolutePath=="/splcloud/fcgi-bin/smartbox_new.fcg"){
+                if(SlowSuggestions)await Task.Delay(200,token).ConfigureAwait(false);
+                body="{\"code\":0,\"data\":{\"song\":{\"itemlist\":[{\"mid\":\"hintfixture\",\"name\":\"Ref:rain\",\"singer\":\"Aimer\"},{\"mid\":\"coverfixture\",\"name\":\"Ref:rain\",\"singer\":\"Cover artist\"}]}}}";
+            }else if(request.RequestUri.Host=="u.y.qq.com"&&query.Contains("get_song_detail_yqq")){
+                Check(query.Contains("hintfixture")&&!query.Contains("coverfixture"),"Native catalog ignores another performer's suggestion");
+                body="{\"code\":0,\"catalog\":{\"code\":0,\"data\":{\"track_info\":{\"mid\":\"hintfixture\",\"title\":\"Ref:rain\",\"interval\":290,\"album\":{\"name\":\"Single album\"},\"singer\":[{\"name\":\"Aimer\",\"mid\":\"artistfixture\"}]}}}}";
+            }else if(request.RequestUri.Host=="u.y.qq.com"&&query.Contains("GetAlbumList")){
+                body=new JavaScriptSerializer().Serialize(new{code=0,catalog=new{code=0,data=new{albumList=new[]{new{albumMid="albumfixture",albumName=WrongAlbum?"Other album":"ペニーレイン (Penny Rain)",albumTranName=WrongAlbum?"Other album":"Penny Rain"}}}}});
+            }else if(request.RequestUri.Host=="u.y.qq.com"&&query.Contains("GetAlbumSongList")){
+                var rows=new List<object>();
+                rows.Add(new{songInfo=new{mid="nativefixture",title="Ref:rain",interval=289,album=new{name="ペニーレイン",title="ペニーレイン (Penny Rain)"},singer=new[]{new{name="Aimer"}}}});
+                if(Ambiguous)rows.Add(new{songInfo=new{mid="secondfixture",title="Ref:rain",interval=289,album=new{title="ペニーレイン (Penny Rain)"},singer=new[]{new{name="Aimer"}}}});
+                rows.Add(new{songInfo=new{mid="wrongversion",title="Ref:rain (Live)",interval=289,album=new{title="ペニーレイン (Penny Rain)"},singer=new[]{new{name="Aimer"}}}});
+                body=new JavaScriptSerializer().Serialize(new{code=0,catalog=new{code=0,data=new{songList=rows}}});
+            }else if(request.RequestUri.Host=="u.y.qq.com"&&query.Contains("GetPlayLyricInfo")){
+                Interlocked.Increment(ref NativeCalls);Check(query.Contains("nativefixture"),"Native upgrade requests the verified album's own lyric ID");
+                body=new JavaScriptSerializer().Serialize(new{code=0,lyrics=new{code=0,data=new{lyric=QrcFixture,trans=Convert.ToBase64String(Encoding.UTF8.GetBytes("[00:01]平台同源译文\n[00:05]下一句"))}}});
+            }else if(request.RequestUri.Host=="u.y.qq.com")body="{\"code\":0,\"request\":{\"code\":2001}}";
+            else if(request.RequestUri.AbsolutePath=="/api/search/get/web")body="{\"code\":200,\"result\":{\"songs\":[{\"id\":1357775677,\"name\":\"Ref:rain\",\"duration\":289986,\"artists\":[{\"name\":\"Aimer\"}],\"album\":{\"name\":\"Penny Rain\"}}]}}";
+            else if(request.RequestUri.AbsolutePath=="/api/song/lyric")body="{\"code\":200,\"lrc\":{\"lyric\":\"[00:01]Alternate line\\n[00:05]Next alternate\"},\"tlyric\":{\"lyric\":\"[00:01]备用译文\\n[00:05]备用下一句\"}}";
+            else throw new Exception("Unexpected native catalog endpoint");
+            return new HttpResponseMessage(HttpStatusCode.OK){Content=new StringContent(body,Encoding.UTF8,"application/json")};
+        }
+    }
+    static async Task NativeCatalogUpgrade(){
+        string directory=Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"qq-native-upgrade-"+Guid.NewGuid().ToString("N"));
+        try{
+            var handler=new NativeCatalogHandler();var data=Path.Combine(directory,"success");
+            using(var repository=new LyricRepository(data,handler)){
+                var previous=await repository.FindAsync(RefrainTrack(),CancellationToken.None).ConfigureAwait(false);
+                Check(previous!=null&&previous.Source.Contains("备用歌词")&&previous.NativeCompletion==null,"An existing alternate cache is preserved before native migration");
+            }
+            handler=new NativeCatalogHandler();
+            using(var repository=new LyricRepository(data,handler,true)){
+                var initial=await repository.FindAsync(RefrainTrack(),CancellationToken.None).ConfigureAwait(false);
+                Check(initial!=null&&initial.HasTimedLyrics&&initial.Source.Contains("备用歌词"),"Verified alternate lyrics remain available while the native catalog is checked");
+                Check(initial.NativeCompletion!=null,"Alternate lyric has one native recording completion task");
+                await initial.NativeCompletion.ConfigureAwait(false);
+                var native=initial.NativeReplacement;
+                Check(native!=null&&native.Source=="QQ 音乐"&&native.Lines[0].Text=="First line"&&native.TranslationLines[0].Text=="平台同源译文"&&native.Lines[0].Words.Count==2,"Native upgrade publishes original, translation and word timestamps from one QQ recording");
+            }
+            handler=new NativeCatalogHandler();
+            using(var repository=new LyricRepository(data,handler,true)){
+                var cached=await repository.FindAsync(RefrainTrack(),CancellationToken.None).ConfigureAwait(false);
+                Check(cached!=null&&cached.Source.StartsWith("QQ 音乐")&&cached.Source.Contains("缓存")&&cached.Lines[0].Words.Count==2&&handler.Calls==0,"Native binding and QRC-only cache survive restart without network or alternate enrichment");
+            }
+            foreach(bool wrongAlbum in new[]{false,true}){
+                handler=new NativeCatalogHandler{Ambiguous=!wrongAlbum,WrongAlbum=wrongAlbum};
+                using(var repository=new LyricRepository(Path.Combine(directory,wrongAlbum?"wrong-album":"ambiguous"),handler,true)){
+                    var initial=await repository.FindAsync(RefrainTrack(),CancellationToken.None).ConfigureAwait(false);
+                    await initial.NativeCompletion.ConfigureAwait(false);
+                    Check(initial.NativeReplacement==null&&handler.NativeCalls==0,"Native completion rejects "+(wrongAlbum?"another album":"ambiguous same-album recordings"));
+                }
+            }
+            handler=new NativeCatalogHandler{SlowSuggestions=true};
+            using(var cancellation=new CancellationTokenSource())
+            using(var repository=new LyricRepository(Path.Combine(directory,"cancelled"),handler,true)){
+                var initial=await repository.FindAsync(RefrainTrack(),cancellation.Token).ConfigureAwait(false);
+                cancellation.Cancel();await initial.NativeCompletion.ConfigureAwait(false);
+                Check(initial.NativeReplacement==null&&handler.NativeCalls==0,"Cancelling a song lookup prevents its pending native enrichment from publishing");
+            }
+        }finally{DeleteTemporaryDirectory(directory);}
+    }
+    static MusicSnapshot AvidTrack(){return new MusicSnapshot{Player=MusicPlayer.QQMusic,Title="Avid",Artist="SawanoHiroyuki[nZk]",Album="Avid / Hands Up to the Sky",DurationSeconds=250.293};}
+    sealed class EarlyCatalogHandler:HttpMessageHandler{
+        internal int SearchCalls, CatalogCalls, DetailCalls, AlbumCalls, LyricCalls;
+        internal bool Restricted, WrongAlbum, WrongDuration, Ambiguous, SlowCatalog, FastPrimary;
+        internal bool PrimaryCancelled, AlternateCancelled;
+        internal readonly TaskCompletionSource<bool> CatalogStarted=new TaskCompletionSource<bool>();
+        internal readonly TaskCompletionSource<bool> BothSearchesStarted=new TaskCompletionSource<bool>();
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken token){
+            token.ThrowIfCancellationRequested();string body;string query=Uri.UnescapeDataString(request.RequestUri.Query);
+            if(request.RequestUri.AbsolutePath=="/splcloud/fcgi-bin/smartbox_new.fcg"){
+                Interlocked.Increment(ref CatalogCalls);CatalogStarted.TrySetResult(true);
+                if(SlowCatalog)await Task.Delay(Timeout.Infinite,token).ConfigureAwait(false);
+                var hints=new List<object>{new{mid="avidoriginal",name="Avid",singer="SawanoHiroyuki[nZk]/瑞葵"},new{mid="otherartist",name="Avid",singer="Other artist"}};
+                if(Ambiguous)hints.Add(new{mid="avidsecond",name="Avid",singer="SawanoHiroyuki[nZk]/瑞葵"});
+                body=new JavaScriptSerializer().Serialize(new{code=0,data=new{song=new{itemlist=hints}}});
+            }else if(request.RequestUri.Host=="u.y.qq.com"&&query.Contains("get_song_detail_yqq")){
+                Interlocked.Increment(ref DetailCalls);Check(!query.Contains("otherartist"),"Early native catalog never follows another performer's hint");
+                var track=new{mid=query.Contains("avidsecond")?"avidsecond":"avidoriginal",title="Avid",interval=WrongDuration?210:250,album=new{title=WrongAlbum?"Different album":"Avid / Hands Up to the Sky"},singer=new[]{new{name="SawanoHiroyuki[nZk]",mid="primaryartist"},new{name="瑞葵",mid="guestartist"}}};
+                body=new JavaScriptSerializer().Serialize(new{code=0,catalog=new{code=0,data=new{track_info=track}}});
+            }else if(request.RequestUri.Host=="u.y.qq.com"&&query.Contains("GetAlbumList")){
+                Interlocked.Increment(ref AlbumCalls);body="{\"code\":0,\"catalog\":{\"code\":0,\"data\":{\"albumList\":[]}}}";
+            }else if(request.RequestUri.Host=="c.y.qq.com"&&request.RequestUri.AbsolutePath.Contains("fcg_query_lyric_new")){
+                Interlocked.Increment(ref LyricCalls);Check(query.Contains("avidoriginal"),"Early native catalog fetches only the full identity's lyric ID");
+                if(!FastPrimary)await Task.Delay(Timeout.Infinite,token).ConfigureAwait(false);
+                body=new JavaScriptSerializer().Serialize(new{code=0,lyric=Convert.ToBase64String(Encoding.UTF8.GetBytes("[00:01]First line\n[00:05]Next")),trans=Convert.ToBase64String(Encoding.UTF8.GetBytes("[00:01]原平台译文\n[00:05]下一句"))});
+            }else if(request.RequestUri.Host=="u.y.qq.com"&&query.Contains("GetPlayLyricInfo")){
+                body=new JavaScriptSerializer().Serialize(new{code=0,lyrics=new{code=0,data=new{lyric=QrcFixture,trans=Convert.ToBase64String(Encoding.UTF8.GetBytes("[00:01]原平台译文\n[00:05]下一句"))}}});
+            }else{
+                bool primary=request.RequestUri.Host=="u.y.qq.com";
+                if(Interlocked.Increment(ref SearchCalls)>=2)BothSearchesStarted.TrySetResult(true);
+                if(FastPrimary&&primary){
+                    body="{\"code\":0,\"request\":{\"code\":0,\"data\":{\"body\":{\"song\":{\"list\":[{\"mid\":\"avidoriginal\",\"title\":\"Avid\",\"interval\":250,\"album\":{\"title\":\"Avid / Hands Up to the Sky\"},\"singer\":[{\"name\":\"SawanoHiroyuki[nZk]\"},{\"name\":\"瑞葵\"}]}]}}}}}";
+                }else if(Restricted){body=primary?"{\"code\":0,\"request\":{\"code\":2001}}":"{\"code\":200,\"result\":{\"songs\":[]}}";}
+                else{
+                    try{await Task.Delay(Timeout.Infinite,token).ConfigureAwait(false);}
+                    catch(OperationCanceledException){if(primary)PrimaryCancelled=true;else AlternateCancelled=true;throw;}
+                    throw new Exception("Blocked search returned without cancellation");
+                }
+            }
+            return LoadingHandler.Reply(body);
+        }
+    }
+    static async Task EarlyCatalogRecovery(){
+        string directory=Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"qq-early-native-"+Guid.NewGuid().ToString("N"));
+        try{
+            foreach(bool restricted in new[]{false,true}){
+                var handler=new EarlyCatalogHandler{Restricted=restricted};var data=Path.Combine(directory,restricted?"restricted":"slow");
+                using(var repository=new LyricRepository(data,handler,true)){
+                    var watch=Stopwatch.StartNew();var document=await repository.FindAsync(AvidTrack(),CancellationToken.None).ConfigureAwait(false);
+                    Check(document!=null&&document.HasTimedLyrics&&document.HasTranslation&&document.Source.StartsWith("QQ 音乐")&&!document.Source.Contains("备用歌词")&&watch.Elapsed.TotalSeconds<2,"Native catalog displays same-recording bilingual lyrics promptly when normal searches are "+(restricted?"restricted/unmatched":"blocked"));
+                    Check(handler.CatalogCalls==1&&handler.DetailCalls==1&&handler.AlbumCalls==0&&handler.LyricCalls==1,"An exact suggestion detail avoids unnecessary singer-album traversal");
+                    if(!restricted){await Task.Delay(20).ConfigureAwait(false);Check(handler.PrimaryCancelled&&handler.AlternateCancelled,"A native catalog winner cancels both slower title searches");}
+                }
+                var cachedHandler=new EarlyCatalogHandler();
+                using(var repository=new LyricRepository(data,cachedHandler,true)){
+                    var document=await repository.FindAsync(AvidTrack(),CancellationToken.None).ConfigureAwait(false);
+                    Check(document.HasTimedLyrics&&document.Source.Contains("缓存")&&cachedHandler.SearchCalls==0&&cachedHandler.CatalogCalls==0,"Early native catalog result reopens from the verified recording cache (restricted="+restricted+", source="+document.Source+", searches="+cachedHandler.SearchCalls+", catalogs="+cachedHandler.CatalogCalls+")");
+                }
+            }
+            foreach(int mismatch in new[]{0,1,2}){
+                var handler=new EarlyCatalogHandler{Restricted=true,WrongAlbum=mismatch==0,WrongDuration=mismatch==1,Ambiguous=mismatch==2};
+                using(var repository=new LyricRepository(Path.Combine(directory,"unsafe-"+mismatch),handler,true)){
+                    bool rejected=false;try{await repository.FindAsync(AvidTrack(),CancellationToken.None).ConfigureAwait(false);}catch(InvalidOperationException){rejected=true;}
+                    Check(rejected&&handler.LyricCalls==0,"Early catalog recovery rejects "+(mismatch==0?"another album":mismatch==1?"another duration":"ambiguous same-album recordings"));
+                }
+            }
+            var cancelledHandler=new EarlyCatalogHandler{SlowCatalog=true};
+            using(var repository=new LyricRepository(Path.Combine(directory,"cancelled"),cancelledHandler,true))
+            using(var cancellation=new CancellationTokenSource()){
+                var pending=repository.FindAsync(AvidTrack(),cancellation.Token);
+                await Ready(cancelledHandler.CatalogStarted.Task,"Slow native catalog starts before ordinary search deadlines");
+                cancellation.Cancel();await Ready(pending,"Changing track promptly cancels all three pending catalog searches");
+                bool cancelled=false;try{await pending.ConfigureAwait(false);}catch(OperationCanceledException){cancelled=true;}
+                Check(cancelled&&cancelledHandler.LyricCalls==0,"A cancelled early catalog never fetches or binds a stale song");
+            }
+            var fastHandler=new EarlyCatalogHandler{FastPrimary=true};
+            using(var repository=new LyricRepository(Path.Combine(directory,"fast-primary"),fastHandler,true)){
+                var document=await repository.FindAsync(AvidTrack(),CancellationToken.None).ConfigureAwait(false);
+                Check(document.HasTimedLyrics&&fastHandler.SearchCalls==1&&fastHandler.CatalogCalls==0,"Fast ordinary QQ lookup avoids both extra search paths");
+            }
+        }finally{DeleteTemporaryDirectory(directory);}
+    }
+    static void NativeControllerSwap(){
+        string directory=Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"qq-native-controller-"+Guid.NewGuid().ToString("N"));
+        try{
+            var store=new SettingsStore(directory);
+            using(var repository=new LyricRepository(store.DataDirectory,new BilingualAlbumHandler()))
+            using(var controller=new LyricController(new AppSettings{HideInstrumental=false},store,repository)){
+                var snapshot=RefrainTrack();snapshot.HasTimeline=true;snapshot.PositionSeconds=1.5;snapshot.IsPlaying=false;
+                controller.ApplySnapshot(snapshot,DateTime.UtcNow);WaitForLoad(controller);
+                var initial=controller.Document;var native=LrcParser.Parse("[00:01]Native original\n[00:05]Native next");native.Source="QQ 音乐";native.Translation="[00:01]原平台译文\n[00:05]原平台下一句";LrcParser.EnsureTranslation(native);
+                initial.NativeReplacement=native;controller.ApplySnapshot(snapshot,DateTime.UtcNow);
+                Check(controller.Document==native&&controller.Current=="Native original"&&controller.CurrentTranslation=="原平台译文","Controller atomically replaces both lyric rows on its normal UI update");
+                var manual=LrcParser.Parse("[00:01]Manual original");manual.Translation="[00:01]手动译文";controller.ApplyDocument(manual);manual.NativeReplacement=native;controller.ApplySnapshot(snapshot,DateTime.UtcNow);
+                Check(controller.Document==manual&&controller.Current=="Manual original"&&controller.CurrentTranslation=="手动译文","Native enrichment cannot override an explicitly selected manual lyric");
+            }
+        }finally{DeleteTemporaryDirectory(directory);}
     }
     static void DisplayFormats(){
         foreach(var pair in new[]{new[]{"Small Song","小小的歌"},new[]{"宇宙","宇宙之歌"},new[]{"별빛","星光"}}){

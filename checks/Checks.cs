@@ -1,5 +1,13 @@
 using System;
 using System.IO;
+using System.Net;
+using System.Net.Http;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Web.Script.Serialization;
+using System.Windows.Forms;
+using System.Xml;
 
 namespace MusicBar
 {
@@ -11,9 +19,60 @@ namespace MusicBar
         {
             try
             {
+                PersistentCacheChecks().GetAwaiter().GetResult();
                 string checkDirectory = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "scratch", "root-checks", Guid.NewGuid().ToString("N")));
                 var store = new SettingsStore(checkDirectory);
                 var defaults = store.Load();
+                Check(defaults.MaxCharactersPerLine == 0, "existing lyrics remain unlimited until a character limit is selected");
+                defaults.MaxCharactersPerLine = 12; store.Save(defaults);
+                Check(store.Load().MaxCharactersPerLine == 12, "per-line character limit survives restart");
+                defaults.MaxCharactersPerLine = -1; defaults.Normalize();
+                Check(defaults.MaxCharactersPerLine == 0, "invalid negative character limit returns to unlimited");
+                defaults.MaxCharactersPerLine = 500; defaults.Normalize();
+                Check(defaults.MaxCharactersPerLine == 200, "oversized character limit is bounded");
+                defaults.MaxCharactersPerLine = 0;
+                string segmentText = "甲😀e\u0301乙丁戊己庚";
+                int[] segmentBoundaries = System.Globalization.StringInfo.ParseCombiningCharacters(segmentText);
+                foreach (int limit in new[] { 1, 3, 7 })
+                {
+                    string restoredSegments = "";
+                    for (int first = 0; first < segmentBoundaries.Length; first += limit)
+                    {
+                        var segment = LyricTextSegment.Select(segmentText, limit, (double)segmentBoundaries[first] / segmentText.Length);
+                        Check(System.Globalization.StringInfo.ParseCombiningCharacters(segment.Text).Length <= limit, "character segments never exceed the chosen limit or split a Unicode text element");
+                        Check(Math.Abs(segment.Progress) < .000001, "segment highlighting starts at the correct lyric offset");
+                        restoredSegments += segment.Text;
+                    }
+                    Check(restoredSegments == segmentText, "all character segments preserve every original character in order");
+                }
+                var middleSegment = LyricTextSegment.Select("一二三四五六七八九十", 3, .45);
+                Check(middleSegment.Text == "四五六" && Math.Abs(middleSegment.Progress - .5) < .000001, "segment highlighting follows the actual position within its own text");
+                Check(LyricTextSegment.Select("一二三四五六七八九十", 3, 1).Text == "十", "finished lyrics retain their final segment");
+                Check(LyricTextSegment.Select("一二三四五六七八九十", 3, .05).Text == "一二三", "seeking backward returns to the earlier segment");
+                Check(LyricTextSegment.Select(segmentText, 0, .5).Text == segmentText, "zero limit leaves the complete lyric untouched");
+                Check(LyricTextSegment.Select("一二三四", 2, double.NaN).Text == "一二", "invalid playback progress starts safely from the first segment");
+                LyricTextSegment pairOriginal, pairTranslated;
+                LyricTextSegment.SelectPair("一二三四五六七八九十", "甲乙丙丁戊己庚辛", 3, .45, .65, out pairOriginal, out pairTranslated);
+                Check(pairOriginal.Text == "三四五" && pairTranslated.Text == "丙丁", "different-length lyric and translation share the same page despite different highlighting progress");
+                LyricTextSegment.SelectPair("一二三四五六七八九十", "甲乙丙丁戊己庚辛", 3, .45, .05, out pairOriginal, out pairTranslated);
+                Check(pairTranslated.Text == "丙丁", "translated word progress cannot switch the paired translated page");
+                LyricTextSegment.SelectPair("一二三四五六七八九十", "甲乙丙丁戊己庚辛", 3, .05, .8, out pairOriginal, out pairTranslated);
+                Check(pairOriginal.Text == "一二" && pairTranslated.Text == "甲乙", "seeking backward repositions both lyric rows together");
+                LyricTextSegment.SelectPair("一二三四五六七八九十", "甲乙丙丁戊己庚辛", 3, 1, 1, out pairOriginal, out pairTranslated);
+                Check(pairOriginal.Text == "八九十" && pairTranslated.Text == "庚辛", "both paired rows retain their final page at completion");
+                foreach (int limit in new[] { 1, 3, 12 })
+                    foreach (double progress in new[] { 0, .1, .49, .8, 1 })
+                    {
+                        LyricTextSegment.SelectPair(segmentText, "甲乙丙丁戊己庚辛壬癸甲乙丙丁戊己庚辛壬癸", limit, progress, .8, out pairOriginal, out pairTranslated);
+                        Check(System.Globalization.StringInfo.ParseCombiningCharacters(pairOriginal.Text).Length <= limit &&
+                            System.Globalization.StringInfo.ParseCombiningCharacters(pairTranslated.Text).Length <= limit &&
+                            pairOriginal.Text.Length > 0 && pairTranslated.Text.Length > 0,
+                            "paired Unicode rows stay nonempty and within the limit when the translation is longer");
+                    }
+                LyricTextSegment.SelectPair(segmentText, "译文", 0, .5, .8, out pairOriginal, out pairTranslated);
+                Check(pairOriginal.Text == segmentText && pairTranslated.Text == "译文", "unlimited paired rows preserve the complete sentence");
+                LyricTextSegment.SelectPair(new string('甲', 70000) + "乙", new string('丙', 70000) + "丁", 1, 1, 1, out pairOriginal, out pairTranslated);
+                Check(pairOriginal.Text == "乙" && pairTranslated.Text == "丁", "long paired text cannot overflow page indexing at a one-character limit");
                 Check(defaults.HideWhenPaused, "new settings hide lyrics while paused");
                 Check(defaults.KaraokeEnabled && defaults.BoldLyrics && defaults.EnableHotkey && !defaults.HideTaskbarIcon, "usable karaoke, readability and hotkey defaults");
                 defaults.TranslationColor = "#12AB34"; defaults.TranslationActiveColor = "#FE8721"; defaults.TranslationFontFamily = "等线"; defaults.HotkeyPreset = 2; defaults.HideTaskbarIcon = true;
@@ -47,8 +106,19 @@ namespace MusicBar
                 Check(!restored.PreviewEnabled, "preview does not fake playback after restart");
                 defaults.LyricBrightness = 145; store.Save(defaults);
                 Check(store.Load().LyricBrightness == 145, "brightness persists across restart");
+                defaults.ColorMode = "gradient"; defaults.GradientEndColor = "#C4A5FF"; defaults.TranslationGradientEndColor = "#FFB8D9";
+                defaults.RecentColors = new System.Collections.Generic.List<string> { "#abcdef", "invalid", "#ABCDEF", "#123456" };
+                defaults.AuthorNoticeShown = true; defaults.AuthorWatermarkDismissed = true;
+                Check(store.Save(defaults), "gradient and author visit settings save atomically");
+                var paletteRestored = store.Load();
+                Check(paletteRestored.ColorMode == "gradient" && paletteRestored.GradientEndColor == "#C4A5FF" && paletteRestored.TranslationGradientEndColor == "#FFB8D9", "both gradient endpoints and selected mode survive restart");
+                Check(paletteRestored.RecentColors.Count == 2 && paletteRestored.RecentColors[0] == "#ABCDEF" && paletteRestored.RecentColors[1] == "#123456", "recent colors normalize valid values without duplicates and preserve recency");
+                Check(paletteRestored.AuthorNoticeShown && paletteRestored.AuthorWatermarkDismissed, "completed author visit keeps notice and watermark dismissed on restart");
+                paletteRestored.ColorMode = "unknown"; paletteRestored.GradientEndColor = null; paletteRestored.TranslationGradientEndColor = "bad"; paletteRestored.RecentColors = null; paletteRestored.Normalize();
+                Check(paletteRestored.ColorMode == "solid" && AppSettings.ValidColor(paletteRestored.GradientEndColor) && AppSettings.ValidColor(paletteRestored.TranslationGradientEndColor) && paletteRestored.RecentColors.Count == 0, "invalid new palette settings recover safely");
                 File.WriteAllText(Path.Combine(store.DataDirectory, "settings.json"), "{\"Width\":410,\"FontSize\":19,\"HorizontalOffset\":410,\"ClickThrough\":true,\"QQEnabled\":true,\"OverlayEnabled\":true,\"OnlineLyrics\":true,\"FontFamily\":\"Microsoft YaHei UI\",\"TextColor\":\"#F8FAFC\",\"ActiveColor\":\"#DAD74E\",\"Alignment\":\"left\"}");
                 var upgraded = store.Load();
+                Check(upgraded.ColorMode == "solid" && upgraded.RecentColors.Count == 0 && !upgraded.AuthorNoticeShown && !upgraded.AuthorWatermarkDismissed, "old settings preserve solid colors and receive the initial author notice");
                 Check(upgraded.KaraokeEnabled && upgraded.BoldLyrics && upgraded.EnableHotkey && upgraded.TranslationColor == upgraded.TextColor && upgraded.TranslationActiveColor == upgraded.ActiveColor, "old settings acquire karaoke and translation palette without replacing colors");
                 Check(upgraded.TranslationFontFamily == "", "old settings follow the original font for translated text");
                 Check(!upgraded.UseCustomHotkey && upgraded.EffectiveHotkeyKey == 0x4D && upgraded.EffectiveHotkeyModifiers == 3, "older settings without custom fields retain Ctrl Alt M");
@@ -127,6 +197,9 @@ namespace MusicBar
                     controller.Snapshot = new MusicSnapshot { Player = MusicPlayer.QQMusic, Title = "测试歌曲", Artist = "测试歌手", PositionSeconds = 2, DurationSeconds = 100, HasTimeline = true, IsPlaying = false };
                     controller.ApplyDocument(document);
                     Check(controller.Current == "第一行" && !controller.ManualMode, "paused player uses actual position");
+                    settings.KaraokeEnabled = false; controller.SettingsChanged(false);
+                    Check(controller.OriginalKaraokeProgress == 0 && Math.Abs(controller.OriginalLineProgress - .4) < .001, "character segments keep playback progress when karaoke coloring is disabled");
+                    settings.KaraokeEnabled = true; controller.SettingsChanged(false);
                     Check(!controller.ShouldDisplay, "paused lyrics are retained internally and hidden with the default setting");
                     settings.HideWhenPaused = false;
                     Check(controller.ShouldDisplay, "users can keep the current lyric visible while paused");
@@ -224,6 +297,154 @@ namespace MusicBar
         {
             if (!condition) throw new InvalidOperationException("Failed: " + name);
             passed++;
+        }
+
+        private sealed class CacheHandler : HttpMessageHandler
+        {
+            internal int Calls;
+            internal bool RejectRequests, BlockLyrics;
+            internal readonly TaskCompletionSource<bool> LyricsStarted = new TaskCompletionSource<bool>();
+            internal readonly TaskCompletionSource<bool> ReleaseLyrics = new TaskCompletionSource<bool>();
+            protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
+            {
+                Interlocked.Increment(ref Calls);
+                if (RejectRequests) throw new InvalidOperationException("Offline cache attempted a network request.");
+                string query = Uri.UnescapeDataString(request.RequestUri.Query), body;
+                if (query.Contains("DoSearchForQQMusicDesktop"))
+                    body = "{\"code\":0,\"request\":{\"code\":0,\"data\":{\"body\":{\"song\":{\"list\":[{\"mid\":\"PersistentFixture\",\"title\":\"Cache fixture\",\"interval\":10,\"album\":{\"title\":\"Cache album\"},\"singer\":[{\"name\":\"Cache artist\"}]}]}}}}}";
+                else
+                {
+                    if (BlockLyrics)
+                    {
+                        LyricsStarted.TrySetResult(true);
+                        await ReleaseLyrics.Task.ConfigureAwait(false);
+                    }
+                    if (request.RequestUri.Host == "music.163.com")
+                        body = "{\"code\":200,\"lrc\":{\"lyric\":\"[00:01]First line\\n[00:05]Next line\"},\"tlyric\":{\"lyric\":\"[00:01]第一行\\n[00:05]下一行\"}}";
+                    else if (query.Contains("GetPlayLyricInfo"))
+                        body = new JavaScriptSerializer().Serialize(new { code = 0, lyrics = new { code = 0, data = new {
+                            lyric = Convert.ToBase64String(Encoding.UTF8.GetBytes("[1000,3000]First line(1000,3000)\n[5000,3000]Next line(5000,3000)")),
+                            trans = Convert.ToBase64String(Encoding.UTF8.GetBytes("[00:01]第一行\n[00:05]下一行")) } } });
+                    else body = new JavaScriptSerializer().Serialize(new { code = 0,
+                        lyric = Convert.ToBase64String(Encoding.UTF8.GetBytes("[00:01]First line\n[00:05]Next line")),
+                        trans = Convert.ToBase64String(Encoding.UTF8.GetBytes("[00:01]第一行\n[00:05]下一行")) });
+                }
+                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+            }
+        }
+
+        private static MusicSnapshot CacheTrack()
+        {
+            return new MusicSnapshot { Player = MusicPlayer.QQMusic, Title = "Cache fixture", Artist = "Cache artist",
+                Album = "Cache album", DurationSeconds = 10, HasTimeline = true, IsPlaying = true,
+                PositionSeconds = 2, InterpolateTimeline = false };
+        }
+
+        private static async Task PersistentCacheChecks()
+        {
+            string root = Path.GetFullPath(AppDomain.CurrentDomain.BaseDirectory);
+            string directory = Path.Combine(root, "persistent-cache-" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                var store = new SettingsStore(directory); var track = CacheTrack();
+                var seed = new CacheHandler();
+                using (var repository = new LyricRepository(store.DataDirectory, seed))
+                {
+                    var document = await repository.FindAsync(track, CancellationToken.None).ConfigureAwait(false);
+                    Check(document.HasTimedLyrics && document.HasTranslation, "successful original and translation are stored before exit");
+                    await repository.FetchAsync(new LyricSearchResult { Player = MusicPlayer.NetEase, Id = "123456",
+                        Title = "Exact cache", Artist = "Cache artist", Album = "Cache album", DurationSeconds = 10 }, CancellationToken.None).ConfigureAwait(false);
+                }
+                foreach (string folder in new[] { "lyric-cache-v1", "lyric-match-v1" })
+                    foreach (string file in Directory.GetFiles(Path.Combine(store.DataDirectory, folder), "*.xml"))
+                    {
+                        if (folder == "lyric-cache-v1")
+                        {
+                            var xml = new XmlDocument { XmlResolver = null }; xml.Load(file);
+                            xml.DocumentElement.SetAttribute("translationCheckedUtc", "2000-01-01T00:00:00Z");
+                            xml.DocumentElement.SelectSingleNode("wordTimingChecked").InnerText = "false"; xml.Save(file);
+                        }
+                        File.SetLastWriteTimeUtc(file, new DateTime(2000, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+                    }
+                var offline = new CacheHandler { RejectRequests = true };
+                using (var repository = new LyricRepository(store.DataDirectory, offline, true))
+                {
+                    var cached = repository.FindCached(track);
+                    Check(cached != null && cached.HasTimedLyrics && cached.HasTranslation && cached.Source.Contains("缓存") && offline.Calls == 0,
+                        "cache and recording binding survive restart and age without any enrichment request");
+                    var exact = repository.FindCached(new MusicSnapshot { Player = MusicPlayer.NetEase, Title = "Exact cache", PlatformTrackId = "123456" });
+                    Check(exact != null && exact.HasTimedLyrics && offline.Calls == 0, "native NetEase ID reads persistent lyrics entirely offline");
+                    foreach (int mismatch in new[] { 0, 1, 2 })
+                    {
+                        var changed = CacheTrack();
+                        if (mismatch == 0) changed.DurationSeconds = 30;
+                        else if (mismatch == 1) changed.Album = "Different album";
+                        else changed.Artist = "Different artist";
+                        Check(repository.FindCached(changed) == null, "persistent cache still rejects a different recording identity " + mismatch);
+                    }
+                    var settings = new AppSettings { OnlineLyrics = false, HideInstrumental = false };
+                    using (var controller = new LyricController(settings, store, repository))
+                    {
+                        var incomplete = CacheTrack(); incomplete.DurationSeconds = 0; incomplete.HasTimeline = false;
+                        controller.ApplySnapshot(incomplete, DateTime.UtcNow);
+                        Check(controller.Document == null && offline.Calls == 0, "incomplete offline metadata does not guess a cached recording");
+                        controller.ApplySnapshot(track, DateTime.UtcNow);
+                        Check(controller.Current == "First line" && controller.CurrentTranslation == "第一行" && offline.Calls == 0,
+                            "late reliable timeline enables cached original and translation while online lyrics are disabled");
+                        store.Save(settings); store.SaveOverride("preserved-manual", LrcParser.Parse("[00:01]Imported lyric"));
+                        string lyricDirectory = Path.Combine(store.DataDirectory, "lyric-cache-v1");
+                        File.WriteAllText(Path.Combine(lyricDirectory, "unfinished.tmp"), "pending");
+                        File.WriteAllText(Path.Combine(lyricDirectory, "keep.txt"), "unrelated");
+                        Directory.CreateDirectory(Path.Combine(lyricDirectory, "nested"));
+                        File.WriteAllText(Path.Combine(lyricDirectory, "nested", "keep.xml"), "nested unrelated file");
+                        var info = repository.GetCacheInfo();
+                        Check(info.LyricCount == 2 && info.MatchCount == 1 && info.TotalBytes > 0, "cache stats count stored lyrics, recording bindings and byte size");
+                        var visible = controller.Document; string current = controller.Current;
+                        var cleared = controller.ClearLyricCache();
+                        Check(cleared.DeletedFiles == 4 && cleared.FailedFiles == 0 && repository.GetCacheInfo().LyricCount == 0 && repository.GetCacheInfo().MatchCount == 0,
+                            "manual clear removes only cached XML and unfinished cache files");
+                        Check(ReferenceEquals(controller.Document, visible) && controller.Current == current && controller.CurrentTranslation == "第一行",
+                            "clearing disk cache preserves the current on-screen original and translation");
+                        Check(store.LoadOverride("preserved-manual") != null && File.Exists(Path.Combine(store.DataDirectory, "settings.json")) &&
+                            File.Exists(Path.Combine(lyricDirectory, "keep.txt")) && File.Exists(Path.Combine(lyricDirectory, "nested", "keep.xml")),
+                            "clear preserves settings, manually saved/imported lyrics, unrelated files and nested folders");
+                        var manual = LrcParser.Parse("[00:01]Manual first\n[00:05]Manual next");
+                        controller.ApplyDocument(manual); controller.SeekManual(2); controller.ToggleManual();
+                        controller.ClearLyricCache();
+                        Check(controller.Document == manual && controller.ManualMode && controller.ManualPlaying && controller.Current == "Manual first",
+                            "cache clear preserves a manually chosen document and its playback clock");
+                    }
+                }
+                var blocked = new CacheHandler { BlockLyrics = true };
+                using (var repository = new LyricRepository(Path.Combine(directory, "inflight"), blocked))
+                {
+                    var pending = repository.FindAsync(CacheTrack(), CancellationToken.None);
+                    Check(await Task.WhenAny(blocked.LyricsStarted.Task, Task.Delay(2000)).ConfigureAwait(false) == blocked.LyricsStarted.Task,
+                        "in-flight cache fixture reaches the lyric request");
+                    repository.ClearCache(); blocked.ReleaseLyrics.TrySetResult(true);
+                    var document = await pending.ConfigureAwait(false);
+                    Check(document.HasTimedLyrics && repository.GetCacheInfo().LyricCount == 0 && repository.GetCacheInfo().MatchCount == 0,
+                        "a fetch begun before manual clear cannot recreate either lyric files or recording bindings");
+                    blocked.BlockLyrics = false;
+                    document = await repository.FindAsync(CacheTrack(), CancellationToken.None).ConfigureAwait(false);
+                    Check(document.HasTimedLyrics && repository.GetCacheInfo().LyricCount == 1 && repository.GetCacheInfo().MatchCount == 1,
+                        "new online requests can cache normally after a clear");
+                    string locked = Path.Combine(directory, "inflight", "lyric-cache-v1", "locked.xml");
+                    File.WriteAllText(locked, "locked");
+                    using (var held = new FileStream(locked, FileMode.Open, FileAccess.Read, FileShare.None))
+                    {
+                        var result = repository.ClearCache();
+                        Check(result.FailedFiles == 1 && result.DeletedFiles == 2, "clear reports locked files while removing other cache entries");
+                    }
+                }
+            }
+            finally
+            {
+                string target = Path.GetFullPath(directory);
+                if (!target.StartsWith(root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Invalid cache test cleanup path.");
+                if (Directory.Exists(target)) Directory.Delete(target, true);
+            }
         }
     }
 }
