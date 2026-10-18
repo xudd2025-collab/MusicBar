@@ -88,6 +88,7 @@ namespace MusicBar
             Check(shifted.Bounds.X == 1512 && shifted.Bounds.Width == 80 && shifted.PositionClamped, "A large offset must reach the last safe gap rather than remain locked in the first.");
             CheckSafe(bar, shifted, controls);
             VerifyDirectionalOffsets(bar, controls);
+            VerifyButtonNudges(bar, controls);
 
             settings.HorizontalOffset = 0;
             TaskbarSnapshot narrow = BottomBar(1280, 720, 48, 1);
@@ -472,6 +473,50 @@ namespace MusicBar
             Check(TaskbarGeometry.Calculate(bar, settings, controls).Bounds.X == 1258, "Dragging right out of the first safe gap must skip the button block.");
             settings.HorizontalOffset = TaskbarGeometry.OffsetForPosition(bar, settings, controls, 1257, -1);
             Check(TaskbarGeometry.Calculate(bar, settings, controls).Bounds.X == 612, "Dragging left out of the right safe gap must return before the button block.");
+        }
+
+        private static void VerifyButtonNudges(TaskbarSnapshot bar, List<Rectangle> controls)
+        {
+            foreach (bool locked in new[] { false, true })
+            {
+                var settings = new AppSettings { AuthorWatermarkDismissed = true, ClickThrough = locked };
+                var initial = TaskbarGeometry.Calculate(bar, settings, controls);
+                settings.HorizontalOffset = TaskbarGeometry.NudgeHorizontalOffset(bar, settings, controls, 20);
+                var moved = TaskbarGeometry.Calculate(bar, settings, controls);
+                Check(moved.Bounds.X == initial.Bounds.X + 20 && settings.ClickThrough == locked,
+                    "Position buttons move independently of mouse lock without changing it.");
+                CheckSafe(bar, moved, controls);
+                settings.HorizontalOffset = TaskbarGeometry.NudgeHorizontalOffset(bar, settings, controls, -20);
+                Check(TaskbarGeometry.Calculate(bar, settings, controls).Bounds.X == initial.Bounds.X,
+                    "Opposite button nudges restore the original safe position.");
+            }
+            foreach (int extreme in new[] { -20000, 20000 })
+            {
+                var settings = new AppSettings { AuthorWatermarkDismissed = true, HorizontalOffset = extreme };
+                var boundary = TaskbarGeometry.Calculate(bar, settings, controls);
+                settings.HorizontalOffset = TaskbarGeometry.NudgeHorizontalOffset(bar, settings, controls, extreme < 0 ? 20 : -20);
+                var moved = TaskbarGeometry.Calculate(bar, settings, controls);
+                Check(extreme < 0 ? moved.Bounds.X > boundary.Bounds.X : moved.Bounds.X < boundary.Bounds.X,
+                    "The first reverse button click moves immediately from a previously clamped offset.");
+                CheckSafe(bar, moved, controls);
+            }
+            var crossing = new AppSettings { AuthorWatermarkDismissed = true, HorizontalOffset = 424 };
+            crossing.HorizontalOffset = TaskbarGeometry.NudgeHorizontalOffset(bar, crossing, controls, 20);
+            var crossed = TaskbarGeometry.Calculate(bar, crossing, controls);
+            Check(crossed.Bounds.X >= 1258, "A button nudge crosses occupied taskbar controls into the next safe gap.");
+            CheckSafe(bar, crossed, controls);
+            var floating = new AppSettings { AuthorWatermarkDismissed = true, FollowTaskbar = false, HorizontalOffset = 20000 };
+            var edge = TaskbarGeometry.Calculate(bar, floating, controls);
+            floating.HorizontalOffset = TaskbarGeometry.NudgeHorizontalOffset(bar, floating, controls, -20);
+            Check(TaskbarGeometry.Calculate(bar, floating, controls).Bounds.X == edge.Bounds.X - 20,
+                "Floating lyrics also nudge from their visible clamped position.");
+            using (var overlay = new LyricOverlay())
+            {
+                overlay.UpdateSettings(new AppSettings { AuthorWatermarkDismissed = true, OverlayEnabled = false });
+                overlay.MoveHorizontally(20); overlay.MoveHorizontally(20);
+                Check((int)PrivateField(overlay, "_pendingHorizontalNudge") == 40,
+                    "Nudges requested before a taskbar layout is available remain queued instead of disappearing.");
+            }
         }
 
         private static TaskbarSnapshot OffscreenBar(bool onLeft)
