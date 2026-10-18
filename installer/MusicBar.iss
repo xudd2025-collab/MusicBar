@@ -1,5 +1,5 @@
 #ifndef AppVersion
-  #define AppVersion "1.0.21"
+  #define AppVersion "1.0.23"
 #endif
 #ifndef SourceDir
   #define SourceDir "..\dist\stage\MusicBar"
@@ -47,6 +47,10 @@ Source: "{#SourceDir}\MusicBar.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceDir}\update-source.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceDir}\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceDir}\README.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#SourceDir}\Microsoft.Web.WebView2.Core.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#SourceDir}\Microsoft.Web.WebView2.WinForms.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#SourceDir}\runtimes\*"; DestDir: "{app}\runtimes"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#SourceDir}\third-party\WebView2\*"; DestDir: "{app}\third-party\WebView2"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Dirs]
 Name: "{app}\data"; Flags: uninsneveruninstall

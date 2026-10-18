@@ -12,11 +12,17 @@ $distPath = Join-Path $projectDirectory 'dist'
 $stagePath = Join-Path $distPath 'stage\MusicBar'
 New-Item -ItemType Directory -Path $stagePath -Force | Out-Null
 # Stage contains only these explicitly allowed files. User data is never copied.
-$files = @('MusicBar.exe','MusicBar.exe.config','MusicBar.ico','update-source.json','LICENSE','README.md')
-foreach ($existing in Get-ChildItem -LiteralPath $stagePath -Force) { if ($existing.PSIsContainer -or $existing.Name -notin $files) { throw '分发暂存目录存在额外文件，请检查后使用干净目录。' } }
+$files = @('MusicBar.exe','MusicBar.exe.config','MusicBar.ico','update-source.json','LICENSE','README.md','Microsoft.Web.WebView2.Core.dll','Microsoft.Web.WebView2.WinForms.dll','runtimes\win-x86\native\WebView2Loader.dll','runtimes\win-x64\native\WebView2Loader.dll','runtimes\win-arm64\native\WebView2Loader.dll','third-party\WebView2\LICENSE.txt','third-party\WebView2\NOTICE.txt')
+$allowedDirectories = @('runtimes','runtimes\win-x86','runtimes\win-x86\native','runtimes\win-x64','runtimes\win-x64\native','runtimes\win-arm64','runtimes\win-arm64\native','third-party','third-party\WebView2')
+foreach ($existing in Get-ChildItem -LiteralPath $stagePath -Recurse -Force) {
+    $relative = $existing.FullName.Substring($stagePath.Length).TrimStart('\')
+    if (($existing.PSIsContainer -and $relative -notin $allowedDirectories) -or (-not $existing.PSIsContainer -and $relative -notin $files)) { throw '分发暂存目录存在额外文件，请检查后使用干净目录。' }
+}
 foreach ($file in $files) {
-    $source = if ($file -in @('MusicBar.exe','MusicBar.exe.config','MusicBar.ico')) { Join-Path $projectDirectory ('release\' + $file) } else { Join-Path $projectDirectory $file }
-    Copy-Item -LiteralPath $source -Destination (Join-Path $stagePath $file) -Force
+    $source = if ($file -in @('update-source.json','LICENSE','README.md')) { Join-Path $projectDirectory $file } else { Join-Path $projectDirectory ('release\' + $file) }
+    $destination = Join-Path $stagePath $file
+    New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
+    Copy-Item -LiteralPath $source -Destination $destination -Force
 }
 if (-not $CompilerPath) {
     foreach ($candidate in @((Join-Path $projectDirectory '.tools\inno\ISCC.exe'), "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 7\ISCC.exe")) {
