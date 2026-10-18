@@ -404,6 +404,7 @@ namespace MusicBar
         private int _dragOriginalVertical;
         private string _dragOriginalAlignment;
         private bool _publishingPosition;
+        private int _pendingHorizontalNudge;
 
         public event EventHandler OpenSettingsRequested;
         public event EventHandler ExitRequested;
@@ -621,6 +622,17 @@ namespace MusicBar
             return DrawLyrics(width, height, 1, true, true);
         }
 
+        public void MoveHorizontally(int amount)
+        {
+            if (amount == 0) return;
+            OnUi(delegate
+            {
+                if (_dragging) FinishDrag();
+                _pendingHorizontalNudge = (int)Math.Max(-40000L, Math.Min(40000L, (long)_pendingHorizontalNudge + amount));
+                RefreshOverlay();
+            });
+        }
+
         private void RefreshOverlay()
         {
             if (_disposed || IsDisposed || Disposing) return;
@@ -684,8 +696,15 @@ namespace MusicBar
                 }
             }
 
+            bool nudged = _pendingHorizontalNudge != 0;
+            if (nudged)
+            {
+                _settings.HorizontalOffset = TaskbarGeometry.NudgeHorizontalOffset(bar, GeometrySettings(), occupied, _pendingHorizontalNudge);
+                _pendingHorizontalNudge = 0;
+            }
             OverlayLayout layout = TaskbarGeometry.Calculate(bar, GeometrySettings(), occupied);
             ApplyLayout(bar, occupied, layout);
+            if (nudged) PublishPosition(false);
         }
 
         private void ApplyLayout(TaskbarSnapshot bar, IList<Rectangle> occupied, OverlayLayout layout)

@@ -1,8 +1,20 @@
-# MusicBar
+# MusicBar · Windows 任务栏歌词
 
-Windows 任务栏歌词工具，支持 QQ 音乐、网易云音乐、逐句译文、长句滚动和歌词外观设置。MIT 开源。
+MusicBar 是一款免费开源的 Windows 音乐歌词工具，提供中文设置界面，将桌面歌词显示在任务栏中。支持 QQ 音乐、网易云音乐、逐句译文、长句滚动和歌词外观设置，采用 MIT 许可证。
 
 [下载最新版本](https://github.com/xudd2025-collab/MusicBar/releases/latest) · [更新记录](CHANGELOG.md) · [参与开发](CONTRIBUTING.md)
+
+## 界面展示
+
+### 双行歌词效果
+
+软件内置演唱进度预览，展示原文、译文和渐变效果。
+
+![MusicBar 双行歌词演唱进度预览](assets/musicbar-playback.png)
+
+### 外观与配色库
+
+![MusicBar 中文设置界面中的歌词外观与配色库](assets/musicbar-appearance.png)
 
 ## 安装
 

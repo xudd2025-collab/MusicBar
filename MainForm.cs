@@ -274,7 +274,7 @@ namespace MusicBar
             var positionBar = new FlowLayoutPanel { Height = 42, WrapContents = false, Margin = new Padding(0, 0, 0, 10) };
             var left = Theme.Button("← 左移", false); left.Width = 90; left.Height = 34; left.Click += delegate { MoveHorizontally(-20); };
             var right = Theme.Button("右移 →", false); right.Width = 90; right.Height = 34; right.Click += delegate { MoveHorizontally(20); };
-            var moveHint = Theme.Label("解锁后按住歌词拖动；调好位置后重新锁定。", 9, Theme.Muted); moveHint.Width = 450; moveHint.Height = 34;
+            var moveHint = Theme.Label("左右按钮可直接调整；解锁后也可按住歌词拖动。", 9, Theme.Muted); moveHint.Width = 450; moveHint.Height = 34;
             positionBar.Controls.Add(left); positionBar.Controls.Add(right); positionBar.Controls.Add(moveHint); page.Controls.Add(positionBar);
             connectionHint = Theme.Label("等待连接", 9, Theme.Muted); connectionHint.Height = 68; connectionHint.TextAlign = ContentAlignment.TopLeft; connectionHint.Margin = new Padding(0); page.Controls.Add(connectionHint);
         }
@@ -882,7 +882,8 @@ namespace MusicBar
             if (IsDisposed) return;
             var snapshot = controller.Snapshot;
             var s = controller.Settings;
-            if (positionPreview && (snapshot.HasTrack || controller.ManualMode) && (!s.HideWhenPaused || (controller.ManualMode ? controller.ManualPlaying : snapshot.IsPlaying)))
+            if (positionPreview && s.OverlayEnabled && !string.IsNullOrWhiteSpace(controller.Current) &&
+                (!s.HideWhenPaused || (controller.ManualMode ? controller.ManualPlaying : snapshot.IsPlaying)))
             {
                 positionPreview = false; s.PreviewEnabled = false; controller.Store.Save(s);
             }
@@ -975,8 +976,17 @@ namespace MusicBar
         private void MoveHorizontally(int amount)
         {
             var settings = controller.Settings;
-            settings.HorizontalOffset = Math.Max(-20000, Math.Min(20000, settings.HorizontalOffset + amount));
-            SyncPositionControls(); Apply(false);
+            settings.OverlayEnabled = true;
+            if (!controller.ShouldDisplay)
+            {
+                positionPreview = !settings.PreviewEnabled;
+                settings.PreviewEnabled = true;
+            }
+            bool previous = updating; updating = true;
+            overlaySwitch.Checked = true;
+            updating = previous;
+            Apply(false);
+            overlay.MoveHorizontally(amount);
         }
         private void SyncPositionControls()
         {

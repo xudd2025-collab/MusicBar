@@ -214,6 +214,13 @@ namespace MusicBar
             return rank;
         }
 
+        internal static int NudgeHorizontalOffset(TaskbarSnapshot bar, AppSettings settings, IList<Rectangle> occupied, int amount)
+        {
+            OverlayLayout current = Calculate(bar, settings, occupied);
+            int offset = current.Bounds.IsEmpty ? settings.HorizontalOffset : current.ResolvedHorizontalOffset;
+            return (int)Math.Max(-20000L, Math.Min(20000L, (long)offset + amount));
+        }
+
         internal static int OffsetForPosition(TaskbarSnapshot bar, AppSettings settings, IList<Rectangle> occupied, int desiredPosition, int direction)
         {
             if (!settings.FollowTaskbar)
