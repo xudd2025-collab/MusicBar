@@ -18,7 +18,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || github.ref_name }}
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+      - name: Verify manual release source
+        if: github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          if ($env:RELEASE_TAG -notmatch '^v\d+\.\d+\.\d+$') { throw 'Invalid version tag.' }
+          $releaseRef = "refs/tags/$($env:RELEASE_TAG)^{commit}"
+          git rev-parse --verify $releaseRef
+          if ($LASTEXITCODE -ne 0) { throw 'The release tag must already exist.' }
+          # A manual rerun may repair checks and this workflow only. Every
+          # shipped source, build input, resource and installer must match the tag.
+          git diff --exit-code --stat $releaseRef HEAD -- . ':(exclude)checks/**' ':(exclude).github/workflows/release.yml'
+          if ($LASTEXITCODE -ne 0) { throw 'Manual release source differs from the published tag outside checks and this workflow.' }
       - name: Build and check
         shell: pwsh
         run: |
@@ -36,14 +51,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+          RELEASE_EVENT: ${{ github.event_name }}
         run: |
           $manifest = Get-Content dist/update.json -Raw | ConvertFrom-Json
           $manifest.notes | Set-Content dist/release-notes.md -Encoding utf8
-          gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY 2>$null
+          $publishedRelease = gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --json isDraft,isPrerelease 2>$null
           if ($LASTEXITCODE -ne 0) {
+            if ($env:RELEASE_EVENT -eq 'workflow_dispatch') { throw 'A manual rerun requires an already published stable release.' }
             gh release create $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --verify-tag --title "MusicBar $($manifest.version)" --notes-file dist/release-notes.md "dist/$($manifest.installer.name)" "dist/MusicBar-Portable-$($manifest.version).zip" dist/SHA256SUMS.txt
             if ($LASTEXITCODE -ne 0) { throw 'Release publication failed.' }
           } else {
+            $releaseStatus = $publishedRelease | ConvertFrom-Json
+            if ($releaseStatus.isDraft -or $releaseStatus.isPrerelease) { throw 'Only an already published stable release can be mirrored.' }
             gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --pattern $manifest.installer.name --clobber --dir dist
             if ($LASTEXITCODE -ne 0) { throw 'Cannot read the already published installer.' }
             $manifest.installer.sha256 = (Get-FileHash -LiteralPath "dist/$($manifest.installer.name)" -Algorithm SHA256).Hash.ToLowerInvariant()
