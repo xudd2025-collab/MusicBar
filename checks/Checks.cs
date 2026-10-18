@@ -312,16 +312,28 @@ namespace MusicBar
                 string query = Uri.UnescapeDataString(request.RequestUri.Query), body;
                 if (query.Contains("DoSearchForQQMusicDesktop"))
                     body = "{\"code\":0,\"request\":{\"code\":0,\"data\":{\"body\":{\"song\":{\"list\":[{\"mid\":\"PersistentFixture\",\"title\":\"Cache fixture\",\"interval\":10,\"album\":{\"title\":\"Cache album\"},\"singer\":[{\"name\":\"Cache artist\"}]}]}}}}}";
+                else if (request.RequestUri.Host == "music.163.com" && request.RequestUri.AbsolutePath == "/api/search/get/web")
+                    body = "{\"code\":200,\"result\":{\"songs\":[{\"id\":123455,\"name\":\"Cache fixture\",\"duration\":10000,\"album\":{\"name\":\"Cache album\"},\"artists\":[{\"name\":\"Cache artist\"}]}]}}";
                 else
                 {
+                    bool netEaseLyric = request.RequestUri.Host == "music.163.com" && request.RequestUri.AbsolutePath == "/api/song/lyric";
+                    bool qqOrdinaryLyric = request.RequestUri.Host == "c.y.qq.com" && request.RequestUri.AbsolutePath == "/lyric/fcgi-bin/fcg_query_lyric_new.fcg";
+                    bool qqWordLyric = request.RequestUri.Host == "u.y.qq.com" && query.Contains("GetPlayLyricInfo");
+                    if (!netEaseLyric && !qqOrdinaryLyric && !qqWordLyric)
+                        throw new InvalidOperationException("Unexpected cache fixture request: " + request.RequestUri.AbsolutePath);
                     if (BlockLyrics)
                     {
                         LyricsStarted.TrySetResult(true);
-                        await ReleaseLyrics.Task.ConfigureAwait(false);
+                        var cancelled = new TaskCompletionSource<bool>();
+                        using (token.Register(delegate { cancelled.TrySetCanceled(); }))
+                        {
+                            await Task.WhenAny(ReleaseLyrics.Task, cancelled.Task).ConfigureAwait(false);
+                            token.ThrowIfCancellationRequested();
+                        }
                     }
-                    if (request.RequestUri.Host == "music.163.com")
+                    if (netEaseLyric)
                         body = "{\"code\":200,\"lrc\":{\"lyric\":\"[00:01]First line\\n[00:05]Next line\"},\"tlyric\":{\"lyric\":\"[00:01]第一行\\n[00:05]下一行\"}}";
-                    else if (query.Contains("GetPlayLyricInfo"))
+                    else if (qqWordLyric)
                         body = new JavaScriptSerializer().Serialize(new { code = 0, lyrics = new { code = 0, data = new {
                             lyric = Convert.ToBase64String(Encoding.UTF8.GetBytes("[1000,3000]First line(1000,3000)\n[5000,3000]Next line(5000,3000)")),
                             trans = Convert.ToBase64String(Encoding.UTF8.GetBytes("[00:01]第一行\n[00:05]下一行")) } } });
@@ -335,7 +347,9 @@ namespace MusicBar
 
         private static MusicSnapshot CacheTrack()
         {
-            return new MusicSnapshot { Player = MusicPlayer.QQMusic, Title = "Cache fixture", Artist = "Cache artist",
+            // Cache persistence is independent of QQ's short provider-race deadline.
+            // Use the unbounded ordinary match path with an entirely local handler.
+            return new MusicSnapshot { Player = MusicPlayer.NetEase, Title = "Cache fixture", Artist = "Cache artist",
                 Album = "Cache album", DurationSeconds = 10, HasTimeline = true, IsPlaying = true,
                 PositionSeconds = 2, InterpolateTimeline = false };
         }
@@ -344,16 +358,35 @@ namespace MusicBar
         {
             string root = Path.GetFullPath(AppDomain.CurrentDomain.BaseDirectory);
             string directory = Path.Combine(root, "persistent-cache-" + Guid.NewGuid().ToString("N"));
+            var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+            CancellationToken token = cancellation.Token;
             try
             {
                 var store = new SettingsStore(directory); var track = CacheTrack();
                 var seed = new CacheHandler();
                 using (var repository = new LyricRepository(store.DataDirectory, seed))
                 {
-                    var document = await repository.FindAsync(track, CancellationToken.None).ConfigureAwait(false);
+                    var document = await repository.FindAsync(track, token).ConfigureAwait(false);
                     Check(document.HasTimedLyrics && document.HasTranslation, "successful original and translation are stored before exit");
                     await repository.FetchAsync(new LyricSearchResult { Player = MusicPlayer.NetEase, Id = "123456",
-                        Title = "Exact cache", Artist = "Cache artist", Album = "Cache album", DurationSeconds = 10 }, CancellationToken.None).ConfigureAwait(false);
+                        Title = "Exact cache", Artist = "Cache artist", Album = "Cache album", DurationSeconds = 10 }, token).ConfigureAwait(false);
+                }
+                // Keep QQ persistence coverage without involving automatic lookup's
+                // production wall-clock budget in this filesystem/cache check.
+                var qqTrack = new LyricSearchResult { Player = MusicPlayer.QQMusic, Id = "PersistentFixture",
+                    Title = "Cache fixture", Artist = "Cache artist", Album = "Cache album", DurationSeconds = 10 };
+                string qqDirectory = Path.Combine(directory, "qq");
+                using (var repository = new LyricRepository(qqDirectory, new CacheHandler()))
+                {
+                    var document = await repository.FetchAsync(qqTrack, token).ConfigureAwait(false);
+                    Check(document.HasTimedLyrics && document.HasTranslation, "QQ cache is seeded through its explicit lyric endpoint");
+                }
+                var qqOffline = new CacheHandler { RejectRequests = true };
+                using (var repository = new LyricRepository(qqDirectory, qqOffline))
+                {
+                    var document = await repository.FetchAsync(qqTrack, token).ConfigureAwait(false);
+                    Check(document.HasTimedLyrics && document.HasTranslation && document.Source.Contains("缓存") && qqOffline.Calls == 0,
+                        "QQ original and translation survive restart without a network request");
                 }
                 foreach (string folder in new[] { "lyric-cache-v1", "lyric-match-v1" })
                     foreach (string file in Directory.GetFiles(Path.Combine(store.DataDirectory, folder), "*.xml"))
@@ -418,15 +451,15 @@ namespace MusicBar
                 var blocked = new CacheHandler { BlockLyrics = true };
                 using (var repository = new LyricRepository(Path.Combine(directory, "inflight"), blocked))
                 {
-                    var pending = repository.FindAsync(CacheTrack(), CancellationToken.None);
-                    Check(await Task.WhenAny(blocked.LyricsStarted.Task, Task.Delay(2000)).ConfigureAwait(false) == blocked.LyricsStarted.Task,
+                    var pending = repository.FindAsync(CacheTrack(), token);
+                    Check(await Task.WhenAny(blocked.LyricsStarted.Task, Task.Delay(10000, token)).ConfigureAwait(false) == blocked.LyricsStarted.Task,
                         "in-flight cache fixture reaches the lyric request");
                     repository.ClearCache(); blocked.ReleaseLyrics.TrySetResult(true);
                     var document = await pending.ConfigureAwait(false);
                     Check(document.HasTimedLyrics && repository.GetCacheInfo().LyricCount == 0 && repository.GetCacheInfo().MatchCount == 0,
                         "a fetch begun before manual clear cannot recreate either lyric files or recording bindings");
                     blocked.BlockLyrics = false;
-                    document = await repository.FindAsync(CacheTrack(), CancellationToken.None).ConfigureAwait(false);
+                    document = await repository.FindAsync(CacheTrack(), token).ConfigureAwait(false);
                     Check(document.HasTimedLyrics && repository.GetCacheInfo().LyricCount == 1 && repository.GetCacheInfo().MatchCount == 1,
                         "new online requests can cache normally after a clear");
                     string locked = Path.Combine(directory, "inflight", "lyric-cache-v1", "locked.xml");
@@ -440,6 +473,7 @@ namespace MusicBar
             }
             finally
             {
+                cancellation.Cancel(); cancellation.Dispose();
                 string target = Path.GetFullPath(directory);
                 if (!target.StartsWith(root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
                     throw new InvalidOperationException("Invalid cache test cleanup path.");
