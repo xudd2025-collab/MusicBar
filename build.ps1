@@ -20,16 +20,32 @@ foreach ($assemblyName in @('UIAutomationClient.dll','UIAutomationTypes.dll','Wi
     $references += $assemblyPath
 }
 $iconPath = Join-Path $projectDirectory 'assets\MusicBar.ico'
+& (Join-Path $projectDirectory 'Restore-WebView2.ps1')
+$webViewSdkDirectory = Join-Path $projectDirectory '.tools\webview2\1.0.2903.40'
+$webViewAssemblies = @('Microsoft.Web.WebView2.Core.dll', 'Microsoft.Web.WebView2.WinForms.dll')
+foreach ($library in $webViewAssemblies) {
+    if (-not (Test-Path -LiteralPath (Join-Path $webViewSdkDirectory ('lib\net462\' + $library)))) { throw '缺少微软 WebView2 SDK 1.0.2903.40，无法构建作者项目页。' }
+}
 if (-not (Test-Path -LiteralPath $iconPath)) { throw '缺少 assets\MusicBar.ico，无法构建应用图标。' }
 $arguments = @('/nologo','/target:winexe','/platform:anycpu','/optimize+','/utf8output',('/out:' + (Join-Path $outputPath 'MusicBar.exe')),('/win32manifest:' + (Join-Path $projectDirectory 'app.manifest')),('/win32icon:' + $iconPath),('/resource:' + $iconPath + ',MusicBar.AppIcon.ico'))
 foreach ($reference in $references) { $arguments += '/r:' + $reference }
-$sourceFiles = @('AppHotkey.cs','AppUpdateService.cs','AssemblyInfo.cs','LrcParser.cs','LyricController.cs','LyricOverlay.cs','LyricRepository.cs','QQWordLyricDecoder.cs','MainForm.cs','Models.cs','MusicSessionReader.cs','NetEaseBridgeReader.cs','NetEaseLaunchIntegration.cs','Program.cs','SettingsStore.cs','StartupRegistration.cs','TaskbarGeometry.cs','Theme.cs')
+foreach ($library in $webViewAssemblies) { $arguments += '/r:' + (Join-Path $webViewSdkDirectory ('lib\net462\' + $library)) }
+$sourceFiles = @('AppHotkey.cs','AppUpdateService.cs','AssemblyInfo.cs','AuthorProjectDialog.cs','ColorPaletteDialog.cs','LyricPalettes.cs','LrcParser.cs','LyricController.cs','LyricOverlay.cs','LyricRepository.cs','QQWordLyricDecoder.cs','MainForm.cs','Models.cs','MusicSessionReader.cs','NetEaseBridgeReader.cs','NetEaseLaunchIntegration.cs','Program.cs','SettingsStore.cs','StartupRegistration.cs','TaskbarGeometry.cs','Theme.cs')
 $sourcePaths = $sourceFiles | ForEach-Object { Join-Path $projectDirectory $_ }
 $arguments += $sourcePaths
 & $compilerPath @arguments
 if ($LASTEXITCODE -ne 0) { throw 'MusicBar 编译失败。' }
 Copy-Item -LiteralPath (Join-Path $projectDirectory 'MusicBar.exe.config') -Destination $outputPath -Force
 Copy-Item -LiteralPath $iconPath -Destination (Join-Path $outputPath 'MusicBar.ico') -Force
+foreach ($library in $webViewAssemblies) { Copy-Item -LiteralPath (Join-Path $webViewSdkDirectory ('lib\net462\' + $library)) -Destination $outputPath -Force }
+foreach ($architecture in @('x86', 'x64', 'arm64')) {
+    $loaderPath = 'runtimes\win-' + $architecture + '\native'
+    New-Item -ItemType Directory -Path (Join-Path $outputPath $loaderPath) -Force | Out-Null
+    Copy-Item -LiteralPath (Join-Path $webViewSdkDirectory ($loaderPath + '\WebView2Loader.dll')) -Destination (Join-Path $outputPath $loaderPath) -Force
+}
+$webViewNotices = Join-Path $outputPath 'third-party\WebView2'
+New-Item -ItemType Directory -Path $webViewNotices -Force | Out-Null
+foreach ($notice in @('LICENSE.txt', 'NOTICE.txt')) { Copy-Item -LiteralPath (Join-Path $webViewSdkDirectory $notice) -Destination $webViewNotices -Force }
 if (Test-Path -LiteralPath (Join-Path $projectDirectory 'update-source.json')) { Copy-Item -LiteralPath (Join-Path $projectDirectory 'update-source.json') -Destination $outputPath -Force }
 if ($Check) {
     $checkOutputPath = [System.IO.Path]::GetFullPath((Join-Path $projectDirectory 'checks\.build'))
@@ -54,14 +70,9 @@ if ($Check) {
     if ($LASTEXITCODE -ne 0) { throw '网易云接入检查编译失败。' }
     & (Join-Path $checkOutputPath 'MusicBar.BridgeChecks.exe')
     if ($LASTEXITCODE -ne 0) { throw '网易云接入检查失败。' }
-    $qqArguments = @('/nologo','/target:exe','/platform:anycpu','/utf8output',('/out:' + (Join-Path $checkOutputPath 'MusicBar.QQMatchingChecks.exe')), '/main:QQMatchingChecks')
-    foreach ($reference in $references) { $qqArguments += '/r:' + $reference }
-    foreach ($source in $lyricCheckSources) { $qqArguments += Join-Path $projectDirectory $source }
-    $qqArguments += Join-Path $projectDirectory 'checks\QQMatchingChecks.cs'
-    & $compilerPath @qqArguments
-    if ($LASTEXITCODE -ne 0) { throw 'QQ 歌名匹配检查编译失败。' }
-    & (Join-Path $checkOutputPath 'MusicBar.QQMatchingChecks.exe')
-    if ($LASTEXITCODE -ne 0) { throw 'QQ 歌名匹配检查失败。' }
+    # Removed while avp logged this exact development executable on 2026-10-18.
+    # Do not rebuild, execute, rename, or exempt it until the detection is reviewed.
+    Write-Warning 'QQ 独立匹配检查已暂停：检查程序被安全软件移除，检测详情待核实；详情见 SECURITY.md。'
     # Kaspersky detected and removed this development executable on 2026-10-05.
     # Preserve its source for review; do not rebuild or execute it until resolved.
     Write-Warning '更新检查已暂停：MusicBar.UpdateChecks.exe 被卡巴斯基检测并删除，尚未确认是否误报。详情见 SECURITY.md。'

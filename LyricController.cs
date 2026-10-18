@@ -22,6 +22,7 @@ namespace MusicBar
         public string CurrentTranslation = "";
         public double RemainingLineSeconds;
         public double OriginalKaraokeProgress, TranslationKaraokeProgress;
+        public double OriginalLineProgress, TranslationLineProgress;
         public bool IsSongInfo;
         public int CurrentLineIndex = -1;
         public string Message = "打开 QQ 音乐或网易云音乐，并播放一首歌。";
@@ -130,7 +131,7 @@ namespace MusicBar
                     nextLyricRetryUtc = DateTime.MaxValue;
                     BeginLoad();
                 }
-                else if ((Document == null || automaticDocument) && !ManualMode && Settings.OnlineLyrics && Snapshot.IsPlaying && LookupInformationImproved(utcNow))
+                else if ((Document == null || automaticDocument) && !ManualMode && Snapshot.IsPlaying && LookupInformationImproved(utcNow))
                 {
                     // A late/corrected duration gets a fresh matching budget, even
                     // after the earlier incomplete search exhausted its attempts.
@@ -201,7 +202,16 @@ namespace MusicBar
             }
             if (!Settings.OnlineLyrics)
             {
-                Message = "在线歌词已关闭，可在「歌词管理」导入 LRC。"; Notify(); return;
+                LyricDocument cached = Repository.FindCached(requestedTrack);
+                if (cached != null)
+                {
+                    LrcParser.EnsureTranslation(cached);
+                    Document = cached; automaticDocument = true;
+                    documentPlaybackKey = requestedTrack.PlaybackKey;
+                    Message = "使用本地缓存歌词 · " + cached.Source;
+                }
+                else Message = "在线获取已关闭；本地暂无这首歌的缓存，可导入 LRC。";
+                UpdateLine(); Notify(); return;
             }
             if (NeedsNetEaseIntegration && !MusicSnapshot.ValidNetEaseTrackId(Snapshot.PlatformTrackId))
             {
@@ -265,6 +275,17 @@ namespace MusicBar
             }
             consecutiveFailures = inconclusiveAttempts = 0;
             BeginLoad();
+        }
+        public LyricCacheClearResult ClearLyricCache()
+        {
+            CancelRequest();
+            nextLyricRetryUtc = DateTime.MaxValue;
+            var result = Repository.ClearCache();
+            if (Document != null) Volatile.Write(ref Document.NativeReplacement, null);
+            Message = result.FailedFiles == 0 ? "歌词缓存已清空；当前显示的歌词继续保留。" :
+                "已清理可删除的歌词缓存，另有 " + result.FailedFiles + " 个文件暂时无法删除。";
+            UpdateLine(); Notify();
+            return result;
         }
         private void ScheduleRetry(bool serviceFailure)
         {
@@ -338,6 +359,14 @@ namespace MusicBar
         public void UsePlayerClock() { ManualMode = false; ManualPlaying = false; UpdateLine(); Notify(); }
         private void UpdateLine()
         {
+            LyricDocument currentDocument = Document;
+            LyricDocument native = currentDocument == null ? null : Volatile.Read(ref currentDocument.NativeReplacement);
+            if (native != null && automaticDocument && !ManualMode && Settings.OnlineLyrics &&
+                documentPlaybackKey == Snapshot.PlaybackKey)
+            {
+                Document = native;
+                Message = "歌词已连接 · " + native.Source;
+            }
             if (Document != translatedDocument || (Document != null && observedTranslation != (Document.Translation ?? "")))
             {
                 if (Document != null) LrcParser.EnsureTranslation(Document);
@@ -350,6 +379,7 @@ namespace MusicBar
             int lineIndex = -1;
             RemainingLineSeconds = 0;
             OriginalKaraokeProgress = TranslationKaraokeProgress = 0;
+            OriginalLineProgress = TranslationLineProgress = 0;
             if (Document != null && Document.HasTimedLyrics)
             {
                 if (Snapshot.HasTimeline || ManualMode)
@@ -367,11 +397,13 @@ namespace MusicBar
                         double singingEnd = end;
                         if (Settings.HideInstrumental && end - Document.Lines[index].Seconds >= Math.Max(20, Settings.InstrumentalHoldSeconds + 4))
                             singingEnd = Math.Min(end, Document.Lines[index].Seconds + Settings.InstrumentalHoldSeconds);
+                        OriginalLineProgress = LrcParser.KaraokeProgress(Document.Lines[index], position, singingEnd);
+                        if (!string.IsNullOrWhiteSpace(translation) && index < Document.TranslationLines.Count)
+                            TranslationLineProgress = LrcParser.KaraokeProgress(Document.TranslationLines[index], position, singingEnd);
                         if (Settings.KaraokeEnabled)
                         {
-                            OriginalKaraokeProgress = LrcParser.KaraokeProgress(Document.Lines[index], position, singingEnd);
-                            if (!string.IsNullOrWhiteSpace(translation) && index < Document.TranslationLines.Count)
-                                TranslationKaraokeProgress = LrcParser.KaraokeProgress(Document.TranslationLines[index], position, singingEnd);
+                            OriginalKaraokeProgress = OriginalLineProgress;
+                            TranslationKaraokeProgress = TranslationLineProgress;
                         }
                         if (end > position) RemainingLineSeconds = (end - position) / (ManualMode || Snapshot.PlaybackRate <= 0 ? 1 : Snapshot.PlaybackRate);
                         if (Settings.HideInstrumental)

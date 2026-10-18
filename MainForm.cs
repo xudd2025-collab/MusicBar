@@ -20,6 +20,7 @@ namespace MusicBar
         private readonly List<Button> navigation = new List<Button>();
         private Label headerStatus, footerStatus, songTitle, songArtist, liveLine, liveTranslation, connectionHint, qqStatus, neteaseStatus, lyricStatus, manualStatus;
         private Label positionLabel;
+        private Label lyricCacheStatus, lyricCacheResult;
         private Button previewButton, manualButton, usePlayerButton, dragButton, neteaseLaunchButton;
         private readonly System.Windows.Forms.Timer neteaseStartTimer = new System.Windows.Forms.Timer { Interval = 500 };
         private string pendingNetEasePath = "", neteaseRecoveryStatus = "";
@@ -33,6 +34,11 @@ namespace MusicBar
         private NumericUpDown manualSeconds;
         private NumericUpDown horizontalPosition, verticalPosition;
         private PictureBox previewImage;
+        private readonly List<LyricPaletteButton> paletteButtons = new List<LyricPaletteButton>();
+        private readonly List<Action> colorSampleRefreshers = new List<Action>();
+        private Button solidPaletteButton, gradientPaletteButton, originalGradientEnd, translatedGradientEnd;
+        private LinkLabel authorWatermark;
+        private AuthorProjectDialog authorDialog;
         private CancellationTokenSource searchRequest;
         private CancellationTokenSource lyricStatusRequest;
         private string displayedControllerMessage = "", displayedStatusTrackKey = "";
@@ -109,6 +115,11 @@ namespace MusicBar
             };
             Resize += delegate { if (WindowState == FormWindowState.Minimized) { ApplyApplicationIconVisibility(); Hide(); } };
             Shown += delegate { ApplyApplicationIconVisibility(); if (this.startInTray) BeginInvoke((MethodInvoker)delegate { ShowInTaskbar = false; Hide(); }); };
+            Shown += delegate
+            {
+                if (!controller.Settings.AuthorWatermarkDismissed && !controller.Settings.AuthorNoticeShown)
+                    BeginInvoke((MethodInvoker)delegate { ShowAuthorProject(); });
+            };
             updating = false;
             overlay.UpdateSettings(controller.Settings);
             ControllerChanged(this, EventArgs.Empty);
@@ -132,7 +143,7 @@ namespace MusicBar
         protected override void WndProc(ref Message message)
         {
             if (message.Msg == 0x0312 && message.WParam.ToInt32() == AppHotkey.Id)
-            { RestoreWindow(); return; }
+            { ToggleWindow(); return; }
             base.WndProc(ref message);
         }
         private void UpdateHotkey()
@@ -141,7 +152,7 @@ namespace MusicBar
             bool success = false;
             if (enabled && IsHandleCreated) success = appHotkey.Register(Handle, controller.Settings.EffectiveHotkeyModifiers, controller.Settings.EffectiveHotkeyKey);
             else appHotkey.Dispose();
-            if (hotkeyHint != null) hotkeyHint.Text = !enabled ? "快捷键已关闭，可双击托盘图标打开。" : success ? "在其他软件中也可按 " + AppHotkey.Describe(controller.Settings.EffectiveHotkeyKey, controller.Settings.EffectiveHotkeyModifiers) + " 打开 MusicBar。\n点击按键框可录入 F1 等单个功能键或组合键。" : "快捷键未注册，可能已被系统或其他软件占用；请设置另一组合。";
+            if (hotkeyHint != null) hotkeyHint.Text = !enabled ? "快捷键已关闭，可再次运行 MusicBar 打开设置。" : success ? "按 " + AppHotkey.Describe(controller.Settings.EffectiveHotkeyKey, controller.Settings.EffectiveHotkeyModifiers) + " 显示设置窗口，再按一次隐藏；歌词继续运行。\n点击按键框可录入 F1 等单个功能键或组合键。" : "快捷键未注册，可能已被系统或其他软件占用；请设置另一组合。";
         }
         private bool SaveHotkey(bool custom, int key, int modifiers)
         {
@@ -192,7 +203,13 @@ namespace MusicBar
             var quit = Theme.Button("退出 MusicBar", false); quit.Width = 152; quit.Click += delegate { ExitApplication(); }; sidebar.Controls.Add(quit);
             content.Dock = DockStyle.Fill;
             body.Controls.Add(sidebar, 0, 0); body.Controls.Add(content, 1, 0); shell.Controls.Add(body, 0, 1);
-            footerStatus = Theme.Label("设置自动保存 · 歌词浮层不抢占鼠标", 8, Theme.Muted); footerStatus.Dock = DockStyle.Fill; footerStatus.Padding = new Padding(28, 0, 20, 0); footerStatus.AutoEllipsis = true; shell.Controls.Add(footerStatus, 0, 2);
+            var footer = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Background };
+            footerStatus = Theme.Label("设置自动保存 · 歌词浮层不抢占鼠标", 8, Theme.Muted); footerStatus.Dock = DockStyle.Fill; footerStatus.Padding = new Padding(28, 0, 20, 0); footerStatus.AutoEllipsis = true;
+            authorWatermark = new LinkLabel { Text = "免费开源  ·  作者 xudd2025-collab", Width = 286, Dock = DockStyle.Right, TextAlign = ContentAlignment.MiddleCenter,
+                LinkColor = Theme.Muted, ActiveLinkColor = Theme.Accent, VisitedLinkColor = Theme.Muted, Font = Theme.Font(8, FontStyle.Regular),
+                LinkBehavior = LinkBehavior.HoverUnderline, AccessibleName = "作者水印，查看原作者项目", Visible = !controller.Settings.AuthorWatermarkDismissed };
+            authorWatermark.LinkClicked += delegate { ShowAuthorProject(); };
+            footer.Controls.Add(footerStatus); footer.Controls.Add(authorWatermark); shell.Controls.Add(footer, 0, 2);
             Controls.Add(shell);
             BuildPlugins(); BuildSettings(); BuildLyrics(); BuildGeneral(); BuildUpdates(); BuildAbout(); SelectPage(0);
         }
@@ -230,6 +247,7 @@ namespace MusicBar
             }
             pages[index].BringToFront();
             if (index == 1) UpdatePreview();
+            if (index == 2) RefreshLyricCacheInfo();
         }
         private void BuildPlugins()
         {
@@ -283,8 +301,9 @@ namespace MusicBar
             switches.Controls.Add(overlaySwitch); switches.Controls.Add(onlineSwitch); page.Controls.Add(switches);
             var previewCard = Theme.Card(); previewCard.Height = 118; previewCard.Margin = new Padding(0, 0, 0, 14);
             var previewTitle = Theme.Label("外观预览 · 演唱进度示例", 9, Theme.Muted); previewTitle.SetBounds(18, 10, 360, 28); previewCard.Controls.Add(previewTitle);
-            var palette = Theme.Button("应用推荐配色", false); palette.SetBounds(570, 8, 154, 32); palette.Anchor = AnchorStyles.Top | AnchorStyles.Right; previewCard.Controls.Add(palette);
+            var palette = Theme.Button("恢复经典配色", false); palette.SetBounds(570, 8, 154, 32); palette.Anchor = AnchorStyles.Top | AnchorStyles.Right; previewCard.Controls.Add(palette);
             previewImage = new PictureBox { BackColor = Theme.Surface, SizeMode = PictureBoxSizeMode.CenterImage }; previewImage.SetBounds(16, 43, 716, 66); previewImage.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right; previewCard.Controls.Add(previewImage); page.Controls.Add(previewCard);
+            page.Controls.Add(BuildPaletteLibrary());
             var display = SettingsGrid("显示样式");
             var style = Theme.Combo(); style.AccessibleName = "字体风格"; style.Items.AddRange(new object[] { "清晰雅黑 · 加粗", "轻盈等线 · 常规", "自定义字体" });
             SyncFontStyle(style); AddSetting(display, "字体风格", style, "两款推荐风格可切换，保留你选择的颜色。");
@@ -319,13 +338,19 @@ namespace MusicBar
             var translatedSung = ColorButton("已唱颜色", delegate { return s.TranslationHighlight; }, delegate(string value) { s.TranslationActiveColor = value; }); translatedSung.AccessibleName = "译文已唱颜色";
             translatedColors.Controls.Add(translatedBase); translatedColors.Controls.Add(translatedSung);
             AddSetting(display, "译文颜色", translatedColors, "译文配色独立于原文。");
+            var gradientEnds = new FlowLayoutPanel { Height = 40, Width = 270, WrapContents = false, Margin = new Padding(0) };
+            originalGradientEnd = ColorButton("原文尾色", delegate { return s.HighlightEnd; }, delegate(string value) { s.GradientEndColor = value; }); originalGradientEnd.AccessibleName = "原文渐变尾色";
+            translatedGradientEnd = ColorButton("译文尾色", delegate { return s.TranslationHighlightEnd; }, delegate(string value) { s.TranslationGradientEndColor = value; }); translatedGradientEnd.AccessibleName = "译文渐变尾色";
+            gradientEnds.Controls.Add(originalGradientEnd); gradientEnds.Controls.Add(translatedGradientEnd);
+            AddSetting(display, "渐变尾色", gradientEnds, "渐变从已唱颜色过渡到尾色；原文、译文分别调整。");
             palette.Click += delegate
             {
-                s.TextColor = "#D5DEE9"; s.ActiveColor = "#7CCEFF"; s.TranslationColor = "#AAB8C8"; s.TranslationActiveColor = "#EAF2FA"; s.LyricBrightness = 100;
+                LyricPalette.All[0].Apply(s); s.ColorMode = "solid"; s.LyricBrightness = 100;
                 bool previous = updating; updating = true; brightness.Value = 100; updating = previous;
                 SetColorSample(originalBase, s.Foreground); SetColorSample(originalSung, s.Highlight);
                 SetColorSample(translatedBase, s.TranslationForeground); SetColorSample(translatedSung, s.TranslationHighlight); Apply(false);
             };
+            SyncPaletteControls();
             var karaoke = Theme.Check("随演唱进度逐字变色", s.KaraokeEnabled); karaoke.CheckedChanged += delegate { if (!updating) { s.KaraokeEnabled = karaoke.Checked; Apply(false); } }; AddSetting(display, "演唱进度", karaoke, "无逐字时间戳时按句内进度估算；暂停、拖动跟随播放器。");
             var bold = Theme.Check("加粗文字", s.BoldLyrics); bold.CheckedChanged += delegate { if (!updating) { s.BoldLyrics = bold.Checked; SyncFontStyle(style); Apply(false); } }; AddSetting(display, "字体清晰度", bold, "减轻描边，改善任务栏小字的可读性。");
             style.SelectedIndexChanged += delegate
@@ -338,6 +363,7 @@ namespace MusicBar
             var lines = Theme.Check("显示下一行（双行）", s.TwoLines); lines.CheckedChanged += delegate { if (!updating) { s.TwoLines = lines.Checked; Apply(false); } }; AddSetting(display, "行数", lines, "双行会在任务栏高度内缩小字号。");
             var translation = Theme.Check("显示当前句译文", s.ShowTranslation); translation.CheckedChanged += delegate { if (!updating) { s.ShowTranslation = translation.Checked; Apply(false); } }; AddSetting(display, "歌词翻译", translation, "有译文时第二行显示译文；没有译文时按行数设置显示。");
             var scroll = Theme.Check("长歌词自动滚动", s.LongLineScroll); scroll.CheckedChanged += delegate { if (!updating) { s.LongLineScroll = scroll.Checked; Apply(false); } }; AddSetting(display, "长句显示", scroll, "自动滚动查看整句；关闭后缩小字号完整显示。");
+            var characterLimit = Theme.Number(0, 200, s.MaxCharactersPerLine, 0); characterLimit.ValueChanged += delegate { if (!updating) { s.MaxCharactersPerLine = (int)characterLimit.Value; Apply(false); } }; AddSetting(display, "每行最多字数", characterLimit, "0 表示不限；原文和译文按同一句进度一起切换片段，两行都遵守字数上限。空格和标点也计数。");
             page.Controls.Add(display);
             var placement = SettingsGrid("任务栏位置");
             var screen = Theme.Combo();
@@ -369,6 +395,49 @@ namespace MusicBar
             page.Controls.Add(behavior);
             var preview = Theme.Button("开启 / 关闭任务栏预览", false); preview.Height = 40; preview.Click += delegate { positionPreview = false; s.PreviewEnabled = !s.PreviewEnabled; Apply(false); }; page.Controls.Add(preview);
         }
+        private Panel BuildPaletteLibrary()
+        {
+            var card = Theme.Card(); card.Height = 214; card.Margin = new Padding(0, 0, 0, 14);
+            var title = Theme.Label("配色库", 12, Theme.Text); title.Font = Theme.Font(12, FontStyle.Bold); title.SetBounds(18, 12, 190, 26); card.Controls.Add(title);
+            var hint = Theme.Label("8 套搭配 · 点击应用，原文与译文一起换色", 8, Theme.Muted); hint.SetBounds(18, 42, 475, 22); card.Controls.Add(hint);
+            solidPaletteButton = Theme.Button("纯色", false); solidPaletteButton.SetBounds(540, 17, 88, 34); solidPaletteButton.Anchor = AnchorStyles.Top | AnchorStyles.Right; solidPaletteButton.AccessibleName = "使用纯色歌词";
+            gradientPaletteButton = Theme.Button("渐变", false); gradientPaletteButton.SetBounds(636, 17, 88, 34); gradientPaletteButton.Anchor = AnchorStyles.Top | AnchorStyles.Right; gradientPaletteButton.AccessibleName = "使用渐变歌词";
+            solidPaletteButton.Click += delegate { controller.Settings.ColorMode = "solid"; Apply(false); };
+            gradientPaletteButton.Click += delegate { controller.Settings.ColorMode = "gradient"; Apply(false); };
+            card.Controls.Add(solidPaletteButton); card.Controls.Add(gradientPaletteButton);
+            var tiles = new TableLayoutPanel { Bounds = new Rectangle(14, 74, 714, 126), ColumnCount = 4, RowCount = 2, BackColor = Theme.Surface, Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right };
+            for (int i = 0; i < 4; i++) tiles.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
+            for (int i = 0; i < 2; i++) tiles.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
+            for (int i = 0; i < LyricPalette.All.Length; i++)
+            {
+                var choice = LyricPalette.All[i];
+                var button = new LyricPaletteButton(choice) { Dock = DockStyle.Fill, Margin = new Padding(4) };
+                button.Click += delegate { choice.Apply(controller.Settings); Apply(false); };
+                paletteButtons.Add(button); tiles.Controls.Add(button, i % 4, i / 4);
+            }
+            card.Controls.Add(tiles); return card;
+        }
+        private void SyncPaletteControls()
+        {
+            bool gradient = controller.Settings.ColorMode == "gradient";
+            foreach (var refresh in colorSampleRefreshers) refresh();
+            foreach (var button in paletteButtons)
+            {
+                button.Gradient = gradient; button.Selected = button.Palette.Matches(controller.Settings); button.Invalidate();
+            }
+            if (solidPaletteButton != null)
+            {
+                solidPaletteButton.BackColor = gradient ? Theme.Input : Theme.AccentSurface;
+                solidPaletteButton.ForeColor = gradient ? Theme.Muted : Theme.Accent;
+                solidPaletteButton.FlatAppearance.BorderColor = gradient ? Theme.Border : Theme.Accent;
+                gradientPaletteButton.BackColor = gradient ? Theme.AccentSurface : Theme.Input;
+                gradientPaletteButton.ForeColor = gradient ? Theme.Accent : Theme.Muted;
+                gradientPaletteButton.FlatAppearance.BorderColor = gradient ? Theme.Accent : Theme.Border;
+                solidPaletteButton.Invalidate(); gradientPaletteButton.Invalidate();
+            }
+            if (originalGradientEnd != null) originalGradientEnd.Enabled = gradient;
+            if (translatedGradientEnd != null) translatedGradientEnd.Enabled = gradient;
+        }
         private void SyncFontStyle(ComboBox style)
         {
             var s = controller.Settings; int selected = 2;
@@ -378,6 +447,31 @@ namespace MusicBar
                 else if (s.FontFamily == "等线" && !s.BoldLyrics) selected = 1;
             }
             bool previous = updating; updating = true; style.SelectedIndex = selected; updating = previous;
+        }
+        private void ShowAuthorProject()
+        {
+            if (exiting || IsDisposed) return;
+            if (authorDialog != null && !authorDialog.IsDisposed) { authorDialog.Activate(); return; }
+            RestoreWindow();
+            controller.Settings.AuthorNoticeShown = true;
+            controller.Store.Save(controller.Settings);
+            using (var dialog = new AuthorProjectDialog(controller.Store.DataDirectory))
+            {
+                authorDialog = dialog;
+                try
+                {
+                    if (dialog.ShowDialog(this) != DialogResult.OK || !dialog.VisitedSuccessfully) return;
+                    controller.Settings.AuthorWatermarkDismissed = true;
+                    if (!controller.Store.Save(controller.Settings))
+                    {
+                        controller.Settings.AuthorWatermarkDismissed = false;
+                        ShowError("无法保存水印设置", controller.Store.LastError); return;
+                    }
+                    authorWatermark.Visible = false;
+                    Apply(false);
+                }
+                finally { authorDialog = null; }
+            }
         }
         private TableLayoutPanel SettingsGrid(string title)
         {
@@ -398,10 +492,17 @@ namespace MusicBar
         private Button ColorButton(string label, Func<Color> read, Action<string> write)
         {
             var button = Theme.Button(label, false); button.Width = 124; SetColorSample(button, read());
+            colorSampleRefreshers.Add(delegate { SetColorSample(button, read()); });
             button.Click += delegate
             {
-                using (var dialog = new ColorDialog { Color = read(), FullOpen = true })
-                    if (dialog.ShowDialog(this) == DialogResult.OK) { write(ColorCode(dialog.Color)); SetColorSample(button, dialog.Color); Apply(false); }
+                using (var dialog = new ColorPaletteDialog(button.AccessibleName ?? label, read(), controller.Settings.RecentColors))
+                    if (dialog.ShowDialog(this) == DialogResult.OK)
+                    {
+                        string color = ColorCode(dialog.SelectedColor);
+                        write(color); controller.Settings.RecentColors.RemoveAll(delegate(string value) { return string.Equals(color, value, StringComparison.OrdinalIgnoreCase); });
+                        controller.Settings.RecentColors.Insert(0, color);
+                        SetColorSample(button, dialog.SelectedColor); Apply(false);
+                    }
             };
             return button;
         }
@@ -445,6 +546,29 @@ namespace MusicBar
             };
             var reset = Theme.Button("恢复自动匹配", false); reset.Width = 146; reset.Click += delegate { controller.RestoreAutomatic(); };
             actions.Controls.Add(fetchButton); actions.Controls.Add(import); actions.Controls.Add(reset); page.Controls.Add(actions);
+            var cache = Theme.Card(); cache.Height = 186; cache.Margin = new Padding(0, 0, 0, 14);
+            var cacheTitle = Theme.Label("本地歌词缓存", 12, Theme.Text); cacheTitle.Font = Theme.Font(12, FontStyle.Bold); cacheTitle.SetBounds(18, 10, 360, 28); cache.Controls.Add(cacheTitle);
+            var cacheHint = Theme.Label("获取成功后自动保存，退出和重启后保留；优先使用本地缓存。", 9, Theme.Muted); cacheHint.SetBounds(18, 42, 710, 26); cacheHint.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right; cache.Controls.Add(cacheHint);
+            lyricCacheStatus = Theme.Label("正在读取缓存…", 9, Theme.Text); lyricCacheStatus.SetBounds(18, 73, 710, 26); lyricCacheStatus.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right; lyricCacheStatus.AccessibleName = "本地歌词缓存用量"; cache.Controls.Add(lyricCacheStatus);
+            var clearCache = Theme.Button("清理歌词缓存", false); clearCache.SetBounds(18, 110, 146, 36); clearCache.AccessibleName = "清理歌词缓存"; cache.Controls.Add(clearCache);
+            var refreshCache = Theme.Button("刷新用量", false); refreshCache.SetBounds(178, 110, 118, 36); refreshCache.Click += delegate { RefreshLyricCacheInfo(); }; cache.Controls.Add(refreshCache);
+            lyricCacheResult = Theme.Label("手动导入和手动绑定的歌词、外观设置会保留。", 8, Theme.Muted); lyricCacheResult.SetBounds(18, 151, 710, 26); lyricCacheResult.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right; cache.Controls.Add(lyricCacheResult);
+            clearCache.Click += delegate
+            {
+                if (MessageBox.Show(this, "清理自动获取的歌词和自动匹配记录？\n\n手动导入的歌词、手动选择的歌曲绑定和全部设置会保留，当前显示的歌词继续播放。之后播放歌曲时可重新获取。", "清理歌词缓存", MessageBoxButtons.OKCancel, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) != DialogResult.OK) return;
+                clearCache.Enabled = false;
+                try
+                {
+                    if (searchRequest != null) searchRequest.Cancel();
+                    lyricStatusRequest = null;
+                    lyricStatus.Text = controller.Message;
+                    LyricCacheClearResult cleared = controller.ClearLyricCache();
+                    lyricCacheResult.Text = cleared.FailedFiles == 0 ? "已清理缓存；下次播放时会按需重新获取。" : "部分缓存无法清理（" + cleared.FailedFiles + " 个文件），请稍后重试。";
+                }
+                catch (Exception ex) { lyricCacheResult.Text = "清理未完成：" + ex.Message; }
+                finally { clearCache.Enabled = true; RefreshLyricCacheInfo(); }
+            };
+            page.Controls.Add(cache); RefreshLyricCacheInfo();
             lyricStatus = Theme.Label("搜索「歌名 歌手」，或导入带时间标记的 LRC 文件。", 9, Theme.Muted); lyricStatus.Height = 60; lyricStatus.TextAlign = ContentAlignment.TopLeft; page.Controls.Add(lyricStatus);
             var manual = Theme.Card(); manual.Height = 152; manual.Margin = new Padding(0, 0, 0, 12);
             var heading = Theme.Label("手动同步", 12, Theme.Text); heading.Font = Theme.Font(12, FontStyle.Bold); heading.SetBounds(18, 12, 200, 27); manual.Controls.Add(heading);
@@ -455,6 +579,17 @@ namespace MusicBar
             usePlayerButton = Theme.Button("使用播放器时间", false); usePlayerButton.SetBounds(418, 86, 140, 38); usePlayerButton.Click += delegate { controller.UsePlayerClock(); }; manual.Controls.Add(usePlayerButton);
             positionLabel = Theme.Label("00:00", 10, Theme.Accent); positionLabel.SetBounds(570, 90, 120, 32); manual.Controls.Add(positionLabel); page.Controls.Add(manual);
             lyricLines = new ListBox { Height = 145, BackColor = Theme.Surface, ForeColor = Theme.Muted, BorderStyle = BorderStyle.FixedSingle, Font = Theme.Font(9, FontStyle.Regular), IntegralHeight = false, HorizontalScrollbar = true, ItemHeight = 26, Margin = new Padding(0) }; page.Controls.Add(lyricLines);
+        }
+        private void RefreshLyricCacheInfo()
+        {
+            if (lyricCacheStatus == null) return;
+            try
+            {
+                LyricCacheInfo info = controller.Repository.GetCacheInfo();
+                string size = info.TotalBytes >= 1024 * 1024 ? (info.TotalBytes / (1024d * 1024)).ToString("0.##") + " MB" : (info.TotalBytes / 1024d).ToString("0.##") + " KB";
+                lyricCacheStatus.Text = "已缓存 " + info.LyricCount + " 首歌词 · " + info.MatchCount + " 条自动匹配记录 · " + size;
+            }
+            catch (Exception ex) { lyricCacheStatus.Text = "暂时无法读取缓存用量：" + ex.Message; }
         }
         private void BuildAbout()
         {
@@ -495,7 +630,7 @@ namespace MusicBar
             var access = Theme.Card(); access.Height = 228; access.Margin = new Padding(0, 0, 0, 18);
             var hiddenIcon = Theme.Check("隐藏应用图标（任务栏和托盘）", controller.Settings.HideTaskbarIcon); hiddenIcon.Location = new Point(24, 18); access.Controls.Add(hiddenIcon);
             hiddenIcon.CheckedChanged += delegate { if (!updating) { controller.Settings.HideTaskbarIcon = hiddenIcon.Checked; ApplyApplicationIconVisibility(); controller.Store.Save(controller.Settings); } };
-            var hotkeyEnabled = Theme.Check("使用快捷键打开 MusicBar", controller.Settings.EnableHotkey); hotkeyEnabled.Location = new Point(24, 66); access.Controls.Add(hotkeyEnabled);
+            var hotkeyEnabled = Theme.Check("使用快捷键显示／隐藏 MusicBar", controller.Settings.EnableHotkey); hotkeyEnabled.Location = new Point(24, 66); access.Controls.Add(hotkeyEnabled);
             var hotkeyInput = new TextBox { ReadOnly = true, BackColor = Theme.Input, ForeColor = Theme.Text, Font = Theme.Font(10, FontStyle.Regular), BorderStyle = BorderStyle.FixedSingle, AccessibleName = "打开 MusicBar 的快捷键" };
             hotkeyInput.Text = AppHotkey.Describe(controller.Settings.EffectiveHotkeyKey, controller.Settings.EffectiveHotkeyModifiers);
             hotkeyInput.SetBounds(24, 112, 270, 32); access.Controls.Add(hotkeyInput);
@@ -704,7 +839,7 @@ namespace MusicBar
                 lyricStatus.Text = songs.Count == 0 ? "没有找到结果，可换用另一歌词来源，或导入 LRC。" : "找到 " + songs.Count + " 个结果，请选择对应版本。";
             }
             catch (OperationCanceledException) { }
-            catch (Exception ex) { if (!IsDisposed) lyricStatus.Text = "搜索失败，可导入本地 LRC。" + Environment.NewLine + ex.Message; }
+            catch (Exception ex) { if (!IsDisposed && !request.IsCancellationRequested) lyricStatus.Text = "搜索失败，可导入本地 LRC。" + Environment.NewLine + ex.Message; }
             finally
             {
                 if (lyricStatusRequest == request) lyricStatusRequest = null;
@@ -732,7 +867,7 @@ namespace MusicBar
                 lyricStatus.Text = controller.Message;
             }
             catch (OperationCanceledException) { }
-            catch (Exception ex) { if (!IsDisposed) lyricStatus.Text = "获取歌词失败：" + ex.Message; }
+            catch (Exception ex) { if (!IsDisposed && !request.IsCancellationRequested) lyricStatus.Text = "获取歌词失败：" + ex.Message; }
             finally
             {
                 if (lyricStatusRequest == request) lyricStatusRequest = null;
@@ -817,6 +952,7 @@ namespace MusicBar
         private void Apply(bool reload)
         {
             if (updating) return;
+            SyncPaletteControls();
             overlay.UpdateSettings(controller.Settings);
             controller.SettingsChanged(reload);
             UpdatePreview();
@@ -861,7 +997,7 @@ namespace MusicBar
         }
         private void PlaybackFrameChanged(object sender, EventArgs args)
         {
-            if (!IsDisposed) overlay.SetKaraokeProgress(controller.OriginalKaraokeProgress, controller.TranslationKaraokeProgress);
+            if (!IsDisposed) overlay.SetKaraokeProgress(controller.OriginalLineProgress, controller.TranslationLineProgress);
         }
         private void UpdatePreview()
         {
@@ -987,6 +1123,12 @@ namespace MusicBar
             tray.Visible = !exiting && !controller.Settings.HideTaskbarIcon;
         }
         public void RestoreWindow() { ApplyApplicationIconVisibility(); Show(); WindowState = FormWindowState.Normal; Activate(); }
+        private void ToggleWindow()
+        {
+            if (authorDialog != null && !authorDialog.IsDisposed) { authorDialog.Activate(); return; }
+            if (Visible && WindowState != FormWindowState.Minimized) { ApplyApplicationIconVisibility(); Hide(); }
+            else RestoreWindow();
+        }
         public void ExitApplication() { exiting = true; tray.Visible = false; Close(); Application.Exit(); }
         protected override void Dispose(bool disposing)
         {

@@ -300,7 +300,7 @@ namespace MusicBar
                 }
             }
 
-            internal void Draw(Graphics graphics, Color color, Color sungColor, double progress, RectangleF row, float scale, AppSettings settings, bool stationary)
+            internal void Draw(Graphics graphics, Color color, Color sungColor, Color sungEndColor, double progress, RectangleF row, float scale, AppSettings settings, bool stationary)
             {
                 if (_path == null) return;
                 float outlineWidth = Math.Max(1.2f, 2.0f * scale);
@@ -315,21 +315,31 @@ namespace MusicBar
                     // The clip stays inside the chosen safe taskbar gap, including the grip.
                     graphics.SetClip(row, CombineMode.Intersect);
                     graphics.TranslateTransform(row.Left + padding - offset, y);
+                    bool gradient = settings.ColorMode == "gradient";
+                    bool fullGradient = gradient && !settings.KaraokeEnabled;
                     using (Pen outline = new Pen(Color.FromArgb(220, 10, 15, 24), outlineWidth))
                     using (SolidBrush fill = new SolidBrush(color))
                     {
                         outline.LineJoin = LineJoin.Round;
                         graphics.DrawPath(outline, _path);
-                        graphics.FillPath(fill, _path);
-                    if (progress > 0)
-                    {
-                        double character = Math.Min(1, progress) * _text.Length;
-                        int index = Math.Min(_text.Length - 1, (int)character);
-                        float edge = _characterEdges == null ? (float)(_glyphSize.Width * Math.Min(1, progress))
-                            : _characterEdges[index] + (float)(character - index) * (_characterEdges[index + 1] - _characterEdges[index]);
-                        graphics.SetClip(new RectangleF(-padding, -padding, edge + padding, _glyphSize.Height + padding * 2), CombineMode.Intersect);
-                        using (var sung = new SolidBrush(sungColor)) graphics.FillPath(sung, _path);
+                        if (!fullGradient) graphics.FillPath(fill, _path);
                     }
+                    if (progress > 0 || fullGradient)
+                    {
+                        if (!fullGradient)
+                        {
+                            double character = Math.Min(1, progress) * _text.Length;
+                            int index = Math.Min(_text.Length - 1, (int)character);
+                            float edge = _characterEdges == null ? (float)(_glyphSize.Width * Math.Min(1, progress))
+                                : _characterEdges[index] + (float)(character - index) * (_characterEdges[index + 1] - _characterEdges[index]);
+                            graphics.SetClip(new RectangleF(-padding, -padding, edge + padding, _glyphSize.Height + padding * 2), CombineMode.Intersect);
+                        }
+                        // Anchor the gradient to the whole glyph path, rather than the sung
+                        // clip or the visible viewport, so seeking and scrolling keep its colors.
+                        using (Brush sung = gradient ? (Brush)new LinearGradientBrush(
+                            new PointF(0, 0), new PointF(Math.Max(1, _glyphSize.Width), 0), sungColor, sungEndColor)
+                            { WrapMode = WrapMode.TileFlipX } : new SolidBrush(sungColor))
+                            graphics.FillPath(sung, _path);
                     }
                 }
                 finally { graphics.Restore(saved); }
@@ -451,6 +461,7 @@ namespace MusicBar
             copy.TwoLines = settings.TwoLines;
             copy.ShowTranslation = settings.ShowTranslation;
             copy.LongLineScroll = settings.LongLineScroll;
+            copy.MaxCharactersPerLine = settings.MaxCharactersPerLine;
             copy.ClickThrough = settings.ClickThrough;
             copy.FollowTaskbar = settings.FollowTaskbar;
             copy.PreviewEnabled = settings.PreviewEnabled;
@@ -462,6 +473,10 @@ namespace MusicBar
             copy.ActiveColor = settings.ActiveColor;
             copy.TranslationColor = settings.TranslationColor;
             copy.TranslationActiveColor = settings.TranslationActiveColor;
+            copy.ColorMode = settings.ColorMode;
+            copy.GradientEndColor = settings.GradientEndColor;
+            copy.TranslationGradientEndColor = settings.TranslationGradientEndColor;
+            copy.AuthorWatermarkDismissed = settings.AuthorWatermarkDismissed;
             copy.KaraokeEnabled = settings.KaraokeEnabled;
             copy.BoldLyrics = settings.BoldLyrics;
             copy.Width = settings.Width;
@@ -486,7 +501,7 @@ namespace MusicBar
                 }
                 if (SameSettings(_settings, copy)) return;
                 bool reset = _settings.TwoLines != copy.TwoLines || _settings.ShowTranslation != copy.ShowTranslation
-                    || _settings.LongLineScroll != copy.LongLineScroll || _settings.FontFamily != copy.FontFamily
+                    || _settings.LongLineScroll != copy.LongLineScroll || _settings.MaxCharactersPerLine != copy.MaxCharactersPerLine || _settings.FontFamily != copy.FontFamily
                     || Math.Abs(_settings.FontSize - copy.FontSize) > .01f;
                 _settings = copy;
                 bool previewChanged = _preview != copy.PreviewEnabled;
@@ -758,8 +773,12 @@ namespace MusicBar
                 && left.TranslationFontFamily == right.TranslationFontFamily
                 && left.FontSize == right.FontSize && left.LyricBrightness == right.LyricBrightness && left.TextColor == right.TextColor && left.ActiveColor == right.ActiveColor
                 && left.TranslationColor == right.TranslationColor && left.TranslationActiveColor == right.TranslationActiveColor
+                && left.ColorMode == right.ColorMode && left.GradientEndColor == right.GradientEndColor
+                && left.TranslationGradientEndColor == right.TranslationGradientEndColor
+                && left.AuthorWatermarkDismissed == right.AuthorWatermarkDismissed
                 && left.KaraokeEnabled == right.KaraokeEnabled && left.BoldLyrics == right.BoldLyrics
                 && left.Width == right.Width && left.HorizontalOffset == right.HorizontalOffset
+                && left.MaxCharactersPerLine == right.MaxCharactersPerLine
                 && left.VerticalOffset == right.VerticalOffset && left.MonitorIndex == right.MonitorIndex && left.Alignment == right.Alignment;
         }
 
@@ -900,32 +919,53 @@ namespace MusicBar
                 }
                 string current = preview ? "预览 · 风吹过的地方，你的歌正在播放" : _current;
                 string next = SecondText(preview);
+                int maximumCharacters = preview || _lineKey.Length > 0 ? _settings.MaxCharactersPerLine : 0;
+                bool translated = _settings.ShowTranslation && (preview || !string.IsNullOrWhiteSpace(_translation));
+                LyricTextSegment originalSegment, secondSegment;
+                if (translated)
+                    LyricTextSegment.SelectPair(current, next, maximumCharacters, preview ? .45 : _originalProgress,
+                        preview ? .45 : _translationProgress, out originalSegment, out secondSegment);
+                else
+                {
+                    originalSegment = LyricTextSegment.Select(current, maximumCharacters, preview ? .45 : _originalProgress);
+                    secondSegment = LyricTextSegment.Select(next, maximumCharacters, 0);
+                }
+                current = originalSegment.Text; next = secondSegment.Text;
                 int lines = !string.IsNullOrWhiteSpace(next) ? 2 : 1;
                 float margin = Math.Max(2, 4 * scale);
                 float verticalMargin = Math.Max(2, 2 * scale);
                 float rowGap = lines == 2 ? Math.Max(1, scale) : 0;
                 float leftMargin = unlocked ? Math.Max(margin, 18 * scale) : margin;
+                float innerWidth = Math.Max(1, width - leftMargin - margin);
+                float watermarkWidth = _settings.AuthorWatermarkDismissed ? 0 : Math.Min(160 * scale, innerWidth * .35f);
+                float watermarkGap = watermarkWidth > 0 ? Math.Min(8 * scale, innerWidth * .04f) : 0;
+                float lyricWidth = Math.Max(1, innerWidth - watermarkWidth - watermarkGap);
                 float rowHeight = Math.Max(1, (height - verticalMargin * 2 - rowGap) / lines);
                 // Fit the actual glyph bounds in BuildPath, avoiding a second reduction of
                 // the font's em size before measuring narrow Latin or CJK glyphs.
                 float pixels = _settings.FontSize * (96f / 72f) * scale;
                 pixels = Math.Max(5, pixels);
-                RectangleF firstRow = new RectangleF(leftMargin, verticalMargin, Math.Max(1, width - leftMargin - margin), rowHeight);
+                RectangleF firstRow = new RectangleF(leftMargin, verticalMargin, lyricWidth, rowHeight);
                 first.Prepare(current, _settings, pixels, firstRow, scale, now);
                 if (!stationary) first.Scroll.Advance(now, deadline);
                 bool karaoke = _settings.KaraokeEnabled && (preview || _lineKey.Length > 0);
-                double originalProgress = karaoke ? (preview ? .45 : _originalProgress) : 0;
-                first.Draw(graphics, _settings.Brightened(_settings.Foreground), _settings.Brightened(_settings.Highlight), originalProgress, firstRow, scale, _settings, stationary);
+                double originalProgress = karaoke ? originalSegment.Progress : 0;
+                first.Draw(graphics, _settings.Brightened(_settings.Foreground), _settings.Brightened(_settings.Highlight), _settings.Brightened(_settings.HighlightEnd), originalProgress, firstRow, scale, _settings, stationary);
                 if (lines == 2)
                 {
-                    RectangleF secondRow = new RectangleF(leftMargin, verticalMargin + rowHeight + rowGap, Math.Max(1, width - leftMargin - margin), rowHeight);
-                    bool translated = _settings.ShowTranslation && (preview || !string.IsNullOrWhiteSpace(_translation));
+                    RectangleF secondRow = new RectangleF(leftMargin, verticalMargin + rowHeight + rowGap, lyricWidth, rowHeight);
                     string secondFont = translated && _settings.TranslationFontFamily.Length > 0 ? _settings.TranslationFontFamily : _settings.FontFamily;
                     second.Prepare(next, _settings, pixels, secondRow, scale, now, secondFont);
                     if (!stationary) second.Scroll.Advance(now, deadline);
-                    double translatedProgress = karaoke && translated ? (preview ? .45 : _translationProgress) : 0;
-                    second.Draw(graphics, _settings.Brightened(translated ? _settings.TranslationForeground : _settings.Foreground), _settings.Brightened(_settings.TranslationHighlight), translatedProgress, secondRow, scale, _settings, stationary);
+                    double translatedProgress = karaoke && translated ? secondSegment.Progress : 0;
+                    second.Draw(graphics, _settings.Brightened(translated ? _settings.TranslationForeground : _settings.Foreground),
+                        _settings.Brightened(translated ? _settings.TranslationHighlight : _settings.Highlight),
+                        _settings.Brightened(translated ? _settings.TranslationHighlightEnd : _settings.HighlightEnd),
+                        translatedProgress, secondRow, scale, _settings, stationary);
                 }
+                if (watermarkWidth > 0)
+                    DrawAuthorWatermark(graphics, new RectangleF(width - margin - watermarkWidth, verticalMargin,
+                        watermarkWidth, Math.Max(1, height - verticalMargin * 2)), scale);
             }
             }
             catch { bitmap.Dispose(); throw; }
@@ -934,6 +974,49 @@ namespace MusicBar
                 if (stationary) { first.Dispose(); second.Dispose(); }
             }
             return bitmap;
+        }
+
+        private static void DrawAuthorWatermark(Graphics graphics, RectangleF bounds, float scale)
+        {
+            if (bounds.Width < 8 || bounds.Height < 6) return;
+            GraphicsState saved = graphics.Save();
+            try
+            {
+                graphics.SetClip(bounds, CombineMode.Intersect);
+                float blockHeight = Math.Min(bounds.Height, 27 * scale);
+                float rowHeight = blockHeight / 2;
+                float top = bounds.Top + (bounds.Height - blockHeight) / 2;
+                string title = bounds.Width >= 108 * scale ? "MusicBar · 免费开源" : "MusicBar";
+                DrawWatermarkLine(graphics, title, new RectangleF(bounds.Left, top, bounds.Width, rowHeight), scale,
+                    Color.FromArgb(220, 193, 204, 219));
+                DrawWatermarkLine(graphics, "xudd2025-collab", new RectangleF(bounds.Left, top + rowHeight, bounds.Width, rowHeight), scale,
+                    Color.FromArgb(210, 154, 169, 189));
+            }
+            finally { graphics.Restore(saved); }
+        }
+
+        private static void DrawWatermarkLine(Graphics graphics, string text, RectangleF row, float scale, Color color)
+        {
+            using (var family = new FontFamily("Microsoft YaHei UI"))
+            using (var format = (StringFormat)StringFormat.GenericTypographic.Clone())
+            using (var path = new GraphicsPath())
+            {
+                format.FormatFlags |= StringFormatFlags.NoWrap;
+                path.AddString(text, family, (int)FontStyle.Regular, Math.Max(5, Math.Min(10.5f * scale, row.Height * .85f)), PointF.Empty, format);
+                RectangleF glyphs = path.GetBounds();
+                if (glyphs.Width <= 0 || glyphs.Height <= 0) return;
+                float fit = Math.Min(1, Math.Min(Math.Max(1, row.Width - scale * 2) / glyphs.Width,
+                    Math.Max(1, row.Height - scale) / glyphs.Height));
+                using (var move = new Matrix(fit, 0, 0, fit, row.Left + scale - glyphs.Left * fit,
+                    row.Top + (row.Height - glyphs.Height * fit) / 2 - glyphs.Top * fit)) path.Transform(move);
+                using (var outline = new Pen(Color.FromArgb(185, 10, 15, 24), Math.Max(.7f, scale)))
+                using (var fill = new SolidBrush(color))
+                {
+                    outline.LineJoin = LineJoin.Round;
+                    graphics.DrawPath(outline, path);
+                    graphics.FillPath(fill, path);
+                }
+            }
         }
 
         private bool Present(Bitmap bitmap, Rectangle bounds)
