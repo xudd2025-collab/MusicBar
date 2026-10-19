@@ -143,7 +143,7 @@ namespace MusicBar
             {
                 token.ThrowIfCancellationRequested();
                 // Respect the service's access restriction and promptly allow the
-                // caller to try its strictly matched alternate lyric provider.
+                // caller to try this platform's public native catalog.
                 if (desktopRequiresLogin) throw;
             }
             string legacyUrl = "https://c.y.qq.com/soso/fcgi-bin/client_search_cp?format=json&new_json=1&p=1&n=30&w=" +
@@ -180,11 +180,25 @@ namespace MusicBar
                 // Recover native QRC for any such song instead of keeping it stranded.
                 if (song.Player == MusicPlayer.QQMusic && !cached.HasTimedLyrics)
                 {
-                    cached = await RecoverQQTimelineAsync(song, cached, token).ConfigureAwait(false);
-                    if (cached.HasTimedLyrics) { TryWriteCache(song, cachedLrc, cached, true, generation); translationRecentlyChecked = true; }
+                    try
+                    {
+                        cached = await RecoverQQTimelineAsync(song, cached, token).ConfigureAwait(false);
+                        if (cached.HasTimedLyrics) { TryWriteCache(song, cachedLrc, cached, true, generation); translationRecentlyChecked = true; }
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        // A native QRC failure must still allow the ordinary
+                        // lyric endpoint to recover this cached recording.
+                    }
                 }
-                if (!translationRecentlyChecked || !cached.WordTimingChecked) StartTranslationCompletion(song, cached, cachedLrc, translationToken, generation, null, null, !translationRecentlyChecked);
-                return cached;
+                if (cached.HasTimedLyrics)
+                {
+                    if (!translationRecentlyChecked || !cached.WordTimingChecked) StartTranslationCompletion(song, cached, cachedLrc, translationToken, generation, null, null, !translationRecentlyChecked);
+                    return cached;
+                }
+                // Untimed text is useful offline, but it must not permanently
+                // hide a later timeline from the provider during online retries.
+                // Keep the cache file until a fresh useful response replaces it.
             }
             if (song.Player == MusicPlayer.QQMusic)
                 return await FetchQQAsync(song, token, translationToken, generation).ConfigureAwait(false);
@@ -507,39 +521,35 @@ namespace MusicBar
                 (string.IsNullOrWhiteSpace(song.Album) || song.DurationSeconds <= 0))
                 return null;
             LyricDocument matchedCache = TryReadMatchedCache(song, token, true, generation);
-            if (matchedCache != null)
-            {
-                if (song.Player == MusicPlayer.QQMusic && matchedCache.Source.Contains("QQ 音乐备用歌词"))
-                    StartQQNativeCompletion(song, matchedCache, token, generation);
-                return matchedCache;
-            }
+            if (matchedCache != null) return matchedCache;
             string queryTitle = song.Player == MusicPlayer.QQMusic ? QQSearchTitle(song.Title) : song.Title;
             string queryArtist = song.Player == MusicPlayer.QQMusic ? TrimQQArtistDisplayNames(song.Artist) : song.Artist;
             string query = queryTitle + (string.IsNullOrWhiteSpace(queryArtist) ? "" : " " + queryArtist);
-            bool canUseAlternative = song.Player == MusicPlayer.QQMusic && !string.IsNullOrWhiteSpace(song.Artist) &&
+            // QQ's public desktop search can require login for title + artist
+            // while the title query remains available. Artist, album, duration
+            // and recording-version checks still decide which result is usable.
+            string primaryQuery = song.Player == MusicPlayer.QQMusic ? queryTitle : query;
+            bool canUseCatalog = completeTranslations && song.Player == MusicPlayer.QQMusic && !string.IsNullOrWhiteSpace(song.Artist) &&
                 !string.IsNullOrWhiteSpace(song.Album) && song.DurationSeconds > 0;
-            if (!canUseAlternative)
+            if (!canUseCatalog)
             {
                 using (CancellationTokenSource bounded = CancellationTokenSource.CreateLinkedTokenSource(token))
                 {
                     if (song.Player == MusicPlayer.QQMusic) bounded.CancelAfter(TimeSpan.FromSeconds(6));
-                    return FinishLookup(song, await LookupAsync(song, query, false, bounded.Token, token, generation).ConfigureAwait(false), generation);
+                    return FinishLookup(song, await LookupAsync(song, primaryQuery, bounded.Token, token, generation).ConfigureAwait(false), generation);
                 }
             }
 
-            // Give the primary a short head start. A slow search must not prevent
-            // a verified recording from the alternative catalog loading promptly.
+            // Race QQ search against QQ's own public catalog. A player's lyrics
+            // must always come from that same platform, including cached bindings.
             using (CancellationTokenSource primaryCancellation = CancellationTokenSource.CreateLinkedTokenSource(token))
-            using (CancellationTokenSource alternateCancellation = CancellationTokenSource.CreateLinkedTokenSource(token))
             using (CancellationTokenSource catalogCancellation = CancellationTokenSource.CreateLinkedTokenSource(token))
             {
                 primaryCancellation.CancelAfter(TimeSpan.FromSeconds(6));
-                alternateCancellation.CancelAfter(TimeSpan.FromSeconds(6.5));
                 catalogCancellation.CancelAfter(TimeSpan.FromSeconds(6.5));
-                Task<LookupResult> primary = LookupAsync(song, query, false, primaryCancellation.Token, token, generation);
-                Task<LookupResult> alternative = null;
+                Task<LookupResult> primary = LookupAsync(song, primaryQuery, primaryCancellation.Token, token, generation);
                 Task<LookupResult> catalog = null;
-                LookupResult primaryResult = null, alternateResult = null, catalogResult = null;
+                LookupResult primaryResult = null, catalogResult = null;
                 try
                 {
                     await Task.WhenAny(primary, Task.Delay(150, token)).ConfigureAwait(false);
@@ -549,11 +559,7 @@ namespace MusicBar
                         primaryResult = await primary.ConfigureAwait(false);
                         if (primaryResult.HasTimedLyrics) return FinishLookup(song, primaryResult, generation);
                     }
-                    alternative = LookupAsync(song, query, true, alternateCancellation.Token, token, generation);
-                    // A blocked search must not serialize every subsequent way of
-                    // finding this recording. Give the usual searches a short
-                    // chance, then race the public native catalog as well.
-                    Task catalogDelay = Task.Delay(200, token);
+                    catalog = LookupQQCatalogAsync(song, catalogCancellation.Token, token, generation);
                     while (true)
                     {
                         token.ThrowIfCancellationRequested();
@@ -563,50 +569,28 @@ namespace MusicBar
                             primaryResult = await primary.ConfigureAwait(false);
                             if (primaryResult.HasTimedLyrics) return FinishLookup(song, primaryResult, generation);
                         }
-                        if (alternateResult == null && alternative.IsCompleted)
-                        {
-                            alternateResult = await alternative.ConfigureAwait(false);
-                            if (alternateResult.HasTimedLyrics)
-                            {
-                                LyricDocument alternate = FinishLookup(song, alternateResult, generation);
-                                StartQQNativeCompletion(song, alternate, token, generation);
-                                return alternate;
-                            }
-                        }
-                        if (catalogResult == null && catalog != null && catalog.IsCompleted)
+                        if (catalogResult == null && catalog.IsCompleted)
                         {
                             catalogResult = await catalog.ConfigureAwait(false);
                             if (catalogResult.HasTimedLyrics) return FinishLookup(song, catalogResult, generation);
                         }
-                        if (completeTranslations && catalog == null &&
-                            (catalogDelay.IsCompleted || primaryResult != null && alternateResult != null))
-                            catalog = LookupQQCatalogAsync(song, catalogCancellation.Token, token, generation);
-                        if (primaryResult != null && alternateResult != null &&
-                            (!completeTranslations || catalogResult != null)) break;
+                        if (primaryResult != null && catalogResult != null) break;
                         var pending = new List<Task>();
                         if (primaryResult == null) pending.Add(primary);
-                        if (alternateResult == null) pending.Add(alternative);
-                        if (completeTranslations && catalogResult == null) pending.Add((Task)catalog ?? catalogDelay);
+                        if (catalogResult == null) pending.Add(catalog);
                         await Task.WhenAny(pending).ConfigureAwait(false);
                     }
                     if (primaryResult.Document != null) return primaryResult.Document;
-                    if (primaryResult.Failure != null)
-                    {
-                        string alternateStatus = alternateResult.Failure != null ? "备用来源也暂时无法读取：" + alternateResult.Failure.Message :
-                            alternateResult.Document != null ? "备用来源已匹配到同一歌曲，但平台未提供带时间轴的歌词。" :
-                            "备用来源未找到歌名、歌手、专辑和时长一致的歌词。";
-                        throw new InvalidOperationException(primaryResult.Failure.Message + Environment.NewLine + alternateStatus, primaryResult.Failure);
-                    }
-                    if (alternateResult.Failure != null) throw alternateResult.Failure;
+                    if (catalogResult.Document != null) return catalogResult.Document;
+                    if (primaryResult.Failure != null) throw primaryResult.Failure;
+                    if (catalogResult.Failure != null) throw catalogResult.Failure;
                     return null;
                 }
                 finally
                 {
                     primaryCancellation.Cancel();
-                    alternateCancellation.Cancel();
                     catalogCancellation.Cancel();
                     ObserveLookup(primary);
-                    if (alternative != null) ObserveLookup(alternative);
                     if (catalog != null) ObserveLookup(catalog);
                 }
             }
@@ -639,40 +623,6 @@ namespace MusicBar
             return result;
         }
 
-        private void StartQQNativeCompletion(MusicSnapshot observed, LyricDocument original, CancellationToken token, int generation)
-        {
-            if (!completeTranslations || disposed || token.IsCancellationRequested || original == null ||
-                observed.Player != MusicPlayer.QQMusic || string.IsNullOrWhiteSpace(observed.Artist) ||
-                string.IsNullOrWhiteSpace(observed.Album) || observed.DurationSeconds <= 0 ||
-                Interlocked.CompareExchange(ref original.NativeCompletionStarted, 1, 0) != 0) return;
-            MusicSnapshot recording = observed.Copy();
-            original.NativeCompletion = Task.Run(async delegate
-            {
-                using (var linked = CancellationTokenSource.CreateLinkedTokenSource(token, lifetime.Token))
-                {
-                    linked.CancelAfter(TimeSpan.FromSeconds(12));
-                    try
-                    {
-                        LyricSearchResult chosen = await FindQQCatalogRecordingAsync(recording, linked.Token).ConfigureAwait(false);
-                        if (chosen == null || !BindingIdentityMatches(recording, chosen)) return;
-                        QQReadResult native = await ReadQQNativeAsync(chosen, linked.Token).ConfigureAwait(false);
-                        linked.Token.ThrowIfCancellationRequested();
-                        if (native.Failure != null || !native.HasTimedLyrics || !native.Document.HasTranslation) return;
-                        TryWriteCache(chosen, native.RawLrc, native.Document, true, generation);
-                        TryWriteMatch(recording, chosen, generation);
-                        // Publish an entire prepared document. The controller swaps
-                        // it on its UI tick so original and translation cannot mix.
-                        lock (cacheGate)
-                            if (!disposed && generation == cacheGeneration && !linked.IsCancellationRequested)
-                                Volatile.Write(ref original.NativeReplacement, native.Document);
-                    }
-                    catch (OperationCanceledException) { }
-                    catch (ObjectDisposedException) { }
-                    catch (InvalidOperationException) { }
-                }
-            });
-        }
-
         private async Task<IDictionary<string, object>> GetQQCatalogAsync(string module, string method,
             IDictionary<string, object> parameters, CancellationToken token)
         {
@@ -693,19 +643,32 @@ namespace MusicBar
             // Public suggestions only locate catalog entries. Their sparse names
             // never authorize a recording match: verify the full native album,
             // performer and duration using the album's published track list.
-            string title = QQSearchTitle(observed.Title);
-            var suggestions = await GetJsonAsync(MusicPlayer.QQMusic,
-                "https://c.y.qq.com/splcloud/fcgi-bin/smartbox_new.fcg?format=json&key=" + Uri.EscapeDataString(title), token).ConfigureAwait(false);
-            RequireCode(suggestions, 0, MusicPlayer.QQMusic);
+            string title = QQCatalogDiscoveryTitle(observed.Title);
             var singerIds = new HashSet<string>(StringComparer.Ordinal);
             var candidates = new List<LyricSearchResult>();
-            int inspected = 0;
-            foreach (var hint in Children(Child(Child(suggestions, "data"), "song"), "itemlist"))
+            var hintIds = new List<string>();
+            // Parenthesized text can identify a different song, especially for
+            // Chinese releases. Query the complete displayed name first; use the
+            // shortened name only when it found no hints for this performer.
+            var queries = new List<string> { Clean(observed.Title).Normalize(NormalizationForm.FormKC) };
+            if (Normalize(queries[0]) != Normalize(title)) queries.Add(title);
+            foreach (string query in queries)
             {
-                if (Normalize(StringValue(hint, "name")) != Normalize(title) ||
-                    !QQCatalogArtistMatches(observed.Artist, StringValue(hint, "singer"))) continue;
-                string mid = StringValue(hint, "mid");
-                if (!Regex.IsMatch(mid, @"\A[A-Za-z0-9]{1,64}\z") || inspected++ >= 3) continue;
+                var suggestions = await GetJsonAsync(MusicPlayer.QQMusic,
+                    "https://c.y.qq.com/splcloud/fcgi-bin/smartbox_new.fcg?format=json&key=" + Uri.EscapeDataString(query), token).ConfigureAwait(false);
+                RequireCode(suggestions, 0, MusicPlayer.QQMusic);
+                foreach (var hint in Children(Child(Child(suggestions, "data"), "song"), "itemlist"))
+                {
+                    if (Normalize(QQCatalogDiscoveryTitle(StringValue(hint, "name"))) != Normalize(title) ||
+                        !QQCatalogArtistMatches(observed.Artist, StringValue(hint, "singer"))) continue;
+                    string mid = StringValue(hint, "mid");
+                    if (Regex.IsMatch(mid, @"\A[A-Za-z0-9]{1,64}\z") && !hintIds.Contains(mid)) hintIds.Add(mid);
+                }
+                if (hintIds.Count > 0) break;
+            }
+            for (int i = 0; i < Math.Min(3, hintIds.Count); i++)
+            {
+                string mid = hintIds[i];
                 var details = await GetQQCatalogAsync("music.pf_song_detail_svr", "get_song_detail_yqq",
                     new Dictionary<string, object> { { "song_mid", mid } }, token).ConfigureAwait(false);
                 var track = Child(details, "track_info");
@@ -721,7 +684,10 @@ namespace MusicBar
             // inspected hints together, then avoid another artist/album traversal.
             var exactAlbumCandidates = candidates.FindAll(delegate(LyricSearchResult candidate)
                 { return DisplayAlbumMatches(observed.Album, candidate, true); });
-            if (exactAlbumCandidates.Count > 0) return SelectAutomaticMatch(observed, exactAlbumCandidates);
+            LyricSearchResult exact = SelectAutomaticMatch(observed, exactAlbumCandidates);
+            // A truncated hint list cannot establish uniqueness. A same-album
+            // hint for another version must not prevent checking its track list.
+            if (hintIds.Count <= 3 && exact != null) return exact;
             var albumIds = new HashSet<string>(StringComparer.Ordinal);
             foreach (string singerMid in singerIds)
             {
@@ -738,6 +704,7 @@ namespace MusicBar
             }
             // Too many matching editions cannot be resolved by taking the first.
             if (albumIds.Count > 2) return null;
+            bool haveAlbumTracks = false;
             foreach (string albumMid in albumIds)
             {
                 var tracks = await GetQQCatalogAsync("music.musichallAlbum.AlbumSongList", "GetAlbumSongList",
@@ -745,8 +712,10 @@ namespace MusicBar
                 var records = new List<object>();
                 foreach (var item in Children(tracks, "songList"))
                 { var info = Child(item, "songInfo"); if (info != null) records.Add(info); }
+                if (records.Count > 0) haveAlbumTracks = true;
                 candidates.AddRange(ParseQQSongs(new Dictionary<string, object> { { "list", records } }, "list"));
             }
+            if (hintIds.Count > 3 && !haveAlbumTracks) return null;
             candidates = candidates.FindAll(delegate(LyricSearchResult candidate) { return DisplayAlbumMatches(observed.Album, candidate, true); });
             return SelectAutomaticMatch(observed, candidates);
         }
@@ -764,35 +733,21 @@ namespace MusicBar
             return artists.Length > 1 && ArtistSignature(artists[0]) == artist;
         }
 
-        private async Task<LookupResult> LookupAsync(MusicSnapshot song, string query, bool alternative,
+        private async Task<LookupResult> LookupAsync(MusicSnapshot song, string query,
             CancellationToken requestToken, CancellationToken translationToken, int generation)
         {
             LookupResult result = new LookupResult();
             try
             {
-                MusicSnapshot recording = alternative ? new MusicSnapshot
-                {
-                    Player = MusicPlayer.NetEase, Title = song.Title, Artist = song.Artist,
-                    Album = song.Album, DurationSeconds = song.DurationSeconds
-                } : song;
-                List<LyricSearchResult> results = await SearchAsync(recording.Player, query, requestToken).ConfigureAwait(false);
-                if (alternative)
-                {
-                    // Cross-provider selection still requires the exact recording
-                    // identity, album and duration. Version words stay significant.
-                    results = results.FindAll(delegate(LyricSearchResult candidate)
-                    {
-                        return DisplayAlbumMatches(song.Album, candidate, true);
-                    });
-                }
-                result.Song = SelectAutomaticMatch(recording, results, alternative);
+                List<LyricSearchResult> results = await SearchAsync(song.Player, query, requestToken).ConfigureAwait(false);
+                result.Song = SelectAutomaticMatch(song, results);
                 if (result.Song != null) result.Document = await FetchAsync(result.Song, requestToken, translationToken, generation).ConfigureAwait(false);
             }
             catch (InvalidOperationException error) { result.Failure = error; }
             catch (OperationCanceledException)
             {
                 translationToken.ThrowIfCancellationRequested();
-                result.Failure = new InvalidOperationException(MusicSnapshot.PlayerName(alternative ? MusicPlayer.NetEase : song.Player) + "歌词请求超时，将自动重试。");
+                result.Failure = new InvalidOperationException(MusicSnapshot.PlayerName(song.Player) + "歌词请求超时，将自动重试。");
             }
             return result;
         }
@@ -801,7 +756,6 @@ namespace MusicBar
         {
             if (result.HasTimedLyrics)
             {
-                if (result.Song.Player != observed.Player) result.Document.Source += " · QQ 音乐备用歌词";
                 TryWriteMatch(observed, result.Song, generation);
             }
             if (result.Document == null && result.Failure != null) throw result.Failure;
@@ -839,9 +793,10 @@ namespace MusicBar
             {
                 if (candidate == null || candidate.Player != song.Player || string.IsNullOrWhiteSpace(candidate.Id) || !seen.Add(candidate.Id)) continue;
                 bool albumMatches = DisplayAlbumMatches(song.Album, candidate, displayNames && fullIdentity);
-                // A QQ alternative must identify the same album even when only
-                // one title/artist candidate remains in the other catalog.
-                if (qqDisplayNames && song.Player == MusicPlayer.NetEase && !albumMatches) continue;
+                // Title-only QQ searches and cross-provider alternatives must
+                // identify the same album even when just one candidate remains.
+                if ((song.Player == MusicPlayer.QQMusic && album.Length > 0 ||
+                    qqDisplayNames && song.Player == MusicPlayer.NetEase) && !albumMatches) continue;
                 bool exactTitle = Normalize(candidate.Title) == title;
                 if (!exactTitle && !(displayNames && fullIdentity && albumMatches &&
                     DisplayNameMatches(song.Title, candidate.Title, candidate.TitleAliases))) continue;
@@ -970,11 +925,19 @@ namespace MusicBar
                 string albumTitle = StringValue(album, "title");
                 if (albumTitle.Length == 0) albumTitle = StringValue(album, "name");
                 if (albumTitle.Length == 0) albumTitle = StringValue(item, "albumname");
+                List<string> albumAliases = ReadDisplayAliases(album);
+                string albumName = Clean(StringValue(album, "name"));
+                // Search and native details can expose the same album as
+                // GUILTY or GUILTY (原罪). Its own name is explicit alias
+                // evidence; never turn a recording/edition label into an alias.
+                if (albumName.Length > 0 && Normalize(albumName) != Normalize(albumTitle) &&
+                    !HasRecordingQualifier(albumTitle) && !HasRecordingQualifier(albumName) && !albumAliases.Contains(albumName))
+                    albumAliases.Add(albumName);
                 results.Add(new LyricSearchResult
                 {
                     Player = MusicPlayer.QQMusic, Id = id, Title = Clean(title),
                     Artist = JoinArtists(item, "singer"), Album = Clean(albumTitle),
-                    TitleAliases = ReadDisplayAliases(item), AlbumAliases = ReadDisplayAliases(album),
+                    TitleAliases = ReadDisplayAliases(item), AlbumAliases = albumAliases,
                     DurationSeconds = Math.Max(0, Number(item, "interval", 0))
                 });
             }
@@ -1098,15 +1061,28 @@ namespace MusicBar
         internal static string TrimTranslatedDisplaySuffix(string title)
         {
             string text = Clean(title).Normalize(NormalizationForm.FormKC);
-            Match suffix = Regex.Match(text, @"\A(?<name>.+)\s*\((?<translation>[^()]+)\)\z");
-            if (!suffix.Success) return text;
-            string name = suffix.Groups["name"].Value.Trim(), translation = suffix.Groups["translation"].Value.Trim();
-            // QQ appends Chinese translations to Japanese display names. Only this
-            // narrow display convention is eligible; recording/version labels stay.
-            if (!Regex.IsMatch(name, @"[\u3040-\u30ff]") || !Regex.IsMatch(translation, @"[\u3400-\u9fff]") ||
-                Regex.IsMatch(translation, @"[A-Za-z\u3040-\u30ff]") ||
-                HasRecordingQualifier(translation)) return text;
-            return name;
+            string baseName = Regex.Replace(text, @"\([^()]*\)", "");
+            // QQ can place the Chinese display translation before Movie/Live
+            // labels as well as after them. Only Japanese names qualify here;
+            // keep every recording label and all non-translation parentheses.
+            if (!Regex.IsMatch(baseName, @"[\u3040-\u30ff]")) return text;
+            return StripQQChineseDisplayAnnotations(text);
+        }
+        private static string StripQQChineseDisplayAnnotations(string text)
+        {
+            // Display annotations form a suffix of adjacent parenthesized groups.
+            // Parentheses within the actual title are never removed.
+            Match display = Regex.Match(text, @"\A(?<name>[^()]+?)(?<annotations>(?:\s*\([^()]+\))+)\s*\z");
+            if (!display.Success) return text;
+            string annotations = Regex.Replace(display.Groups["annotations"].Value, @"\s*\((?<translation>[^()]+)\)", delegate(Match annotation)
+            {
+                string translation = annotation.Groups["translation"].Value.Trim();
+                return Regex.IsMatch(translation, @"[\u3400-\u9fff]") &&
+                    !Regex.IsMatch(translation, @"[A-Za-z\u3040-\u30ff]") && !HasRecordingQualifier(translation)
+                    ? "" : annotation.Value;
+            });
+            string stripped = Regex.Replace(display.Groups["name"].Value + annotations, @"\s+", " ").Trim();
+            return stripped.Length == 0 ? text : stripped;
         }
         private static bool DisplayAlbumMatches(string observed, LyricSearchResult candidate, bool qqDisplayNames)
         {
@@ -1141,7 +1117,7 @@ namespace MusicBar
         }
         private static bool HasRecordingQualifier(string text)
         {
-            return Regex.IsMatch(text ?? "", @"\b(?:live|dj|cover|remix|mix|version|instrumental|acoustic|explicit|clean|edit|radio|short|extended|remaster|tv|size|edition|deluxe|limited|original|bonus|anniversary|mono|stereo)\b|版|现场|翻唱|伴奏|清唱|纯音乐|纯享|混音|重制|加长|录音|演唱会|原声|主题曲|片头曲|片尾曲|ライブ|ライヴ|カバー|リミックス|インスト|アコースティック|バージョン|エディション|限定|通常盤|初回|豪華|特別", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+            return Regex.IsMatch(text ?? "", @"\b(?:live|dj|cover|remix|mix|version|ver|movie|film|instrumental|acoustic|explicit|clean|edit|radio|short|extended|remaster|tv|size|edition|deluxe|limited|original|bonus|anniversary|mono|stereo)\b|版|现场|翻唱|伴奏|清唱|纯音乐|纯享|混音|重制|加长|录音|演唱会|原声|主题曲|片头曲|片尾曲|钢琴|鋼琴|交响|交響|不插电|不插電|重新录制|重新錄製|管弦|弦乐|弦樂|ライブ|ライヴ|カバー|リミックス|インスト|アコースティック|バージョン|エディション|限定|通常盤|初回|豪華|特別|ピアノ|オーケストラ|再録", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
         }
         private static bool DisplayNameMatches(string observed, string canonical, List<string> aliases)
         {
@@ -1158,13 +1134,18 @@ namespace MusicBar
         internal static string QQSearchTitle(string title)
         {
             string text = Clean(title).Normalize(NormalizationForm.FormKC);
-            Match suffix = Regex.Match(text, @"\A(?<name>.+)\s*\((?<translation>[^()]+)\)\z", RegexOptions.CultureInvariant);
-            if (!suffix.Success) return text;
-            string translation = suffix.Groups["translation"].Value.Trim();
             // Query simplification never changes the recording match. English and
             // kanji-only display translations require catalog aliases for selection.
-            return Regex.IsMatch(translation, @"[\u3400-\u9fff]") && !Regex.IsMatch(translation, @"[A-Za-z\u3040-\u30ff]") &&
-                !HasRecordingQualifier(translation) ? suffix.Groups["name"].Value.Trim() : text;
+            return StripQQChineseDisplayAnnotations(text);
+        }
+        internal static string QQCatalogDiscoveryTitle(string title)
+        {
+            string text = QQSearchTitle(title);
+            // Smartbox often supplies only a bare name, even for Movie/Live
+            // recordings. This stem only locates native catalog details; never
+            // use it to select a recording or create a cache binding.
+            Match suffix = Regex.Match(text, @"\A(?<name>[^()]+?)(?:\s*\([^()]+\))+\s*\z");
+            return suffix.Success ? suffix.Groups["name"].Value.Trim() : text;
         }
         private static string ArtistSignature(string text)
         {
@@ -1236,7 +1217,7 @@ namespace MusicBar
                 string.IsNullOrWhiteSpace(observed.Album) || observed.DurationSeconds <= 0 ||
                 double.IsNaN(observed.DurationSeconds) || double.IsInfinity(observed.DurationSeconds) ||
                 !DisplayAlbumMatches(observed.Album, chosen, observed.Player == MusicPlayer.QQMusic)) return false;
-            if (chosen.Player != observed.Player && !(observed.Player == MusicPlayer.QQMusic && chosen.Player == MusicPlayer.NetEase)) return false;
+            if (chosen.Player != observed.Player) return false;
             MusicSnapshot recording = new MusicSnapshot
             {
                 Player = chosen.Player, Title = observed.Title, Artist = observed.Artist,
@@ -1290,7 +1271,6 @@ namespace MusicBar
                 LyricDocument cached = TryReadCache(chosen, out rawLrc, out translationRecentlyChecked);
                 if (cached == null || !cached.HasTimedLyrics) return null;
                 token.ThrowIfCancellationRequested();
-                if (chosen.Player != observed.Player) cached.Source += " · QQ 音乐备用歌词";
                 if (allowNetwork && (!translationRecentlyChecked || !cached.WordTimingChecked))
                     StartTranslationCompletion(chosen, cached, rawLrc, token, generation, null, null, !translationRecentlyChecked);
                 return cached;

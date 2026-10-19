@@ -44,6 +44,52 @@ namespace MusicBar
             }
         }
 
+        private static void VerifyTibetanRendering()
+        {
+            try { using (var family = new FontFamily("Microsoft Himalaya")) { } }
+            catch (ArgumentException)
+            {
+                Console.WriteLine("Tibetan font comparison omitted: Microsoft Himalaya is not installed.");
+                return;
+            }
+            const string original = "བོད་ཡིག་གི་ཚོད་ལྟ།";
+            const string translation = "藏文原文与中文译文一起显示";
+            foreach (bool bold in new[] { false, true })
+            using (var overlay = new LyricOverlay())
+            {
+                var settings = new AppSettings { AuthorWatermarkDismissed = true, OverlayEnabled = false,
+                    TwoLines = false, ShowTranslation = true, LongLineScroll = false, FontSize = 19,
+                    FontFamily = "Microsoft YaHei UI", TranslationFontFamily = "Microsoft YaHei UI", BoldLyrics = bold };
+                overlay.UpdateSettings(settings);
+                overlay.SetLyrics(original, "", translation, true);
+                overlay.SetLineTiming("tibetan-fixture", 10, false);
+                overlay.SetKaraokeProgress(.4, .4);
+                using (Bitmap fallback = CurrentBitmap(overlay, 600, 72))
+                {
+                    Check(VisiblePixelCount(fallback, new Rectangle(4, 2, 592, 32)) > 150 &&
+                        VisiblePixelCount(fallback, new Rectangle(4, 38, 592, 32)) > 150,
+                        "Tibetan original and Chinese translation both paint visible glyphs.");
+                    settings.FontFamily = "Microsoft Himalaya"; overlay.UpdateSettings(settings);
+                    using (Bitmap explicitTibetan = CurrentBitmap(overlay, 600, 72))
+                    {
+                        Check(PixelDifference(fallback, explicitTibetan, new Rectangle(0, 0, 600, 36)) == 0,
+                            "A default font without Tibetan glyphs renders the same shaped text as the installed Tibetan font.");
+                        Check(PixelDifference(fallback, explicitTibetan, new Rectangle(0, 36, 600, 36)) == 0,
+                            "Choosing a Tibetan original font preserves the independently selected Chinese translation font.");
+                    }
+                    settings.FontFamily = "Mistral"; overlay.UpdateSettings(settings);
+                    using (Bitmap latinFallback = CurrentBitmap(overlay, 600, 72))
+                        Check(PixelDifference(fallback, latinFallback, new Rectangle(0, 0, 600, 72)) == 0,
+                            "A Latin-only custom font also falls back for Tibetan without changing Chinese translation.");
+                    Check(settings.FontFamily == "Mistral" && settings.TranslationFontFamily == "Microsoft YaHei UI" &&
+                        (string)PrivateField(PrivateField(overlay, "_currentLine"), "_text") == original,
+                        "Script fallback preserves the user's font choices and complete Tibetan source text.");
+                    CheckMargins(fallback);
+                    SaveDark(fallback, bold ? "overlay-tibetan-bilingual-bold.png" : "overlay-tibetan-bilingual.png");
+                }
+            }
+        }
+
         [STAThread]
         public static int Main(string[] arguments)
         {
@@ -65,6 +111,7 @@ namespace MusicBar
         internal static void Run(bool includeMouseChecks = true, bool includeAnimationChecks = true)
         {
             CharacterLimitRendering();
+            VerifyTibetanRendering();
             AppSettings settings = new AppSettings { AuthorWatermarkDismissed = true };
             TaskbarSnapshot bar = BottomBar(1920, 1080, 48, 1);
             List<Rectangle> controls = new List<Rectangle>

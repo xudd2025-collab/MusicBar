@@ -184,7 +184,10 @@ namespace MusicBar
                     double at, length;
                     if (piece.Index != covered || !double.TryParse(piece.Groups["time"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out at) ||
                         !double.TryParse(piece.Groups["duration"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out length) ||
-                        length <= 0 || at < start || at + length > start + duration + 350 || words.Count > 0 && at < words[words.Count - 1].StartSeconds * 1000) { words.Clear(); break; }
+                        // QQ can give separators and characters zero duration at
+                        // the next word's start. Preserve their text and supplied
+                        // timestamp instead of discarding the entire lyric line.
+                        length < 0 || at < start || at + length > start + duration + 350 || words.Count > 0 && at < words[words.Count - 1].StartSeconds * 1000) { words.Clear(); break; }
                     string word = piece.Groups["text"].Value;
                     if (word.Length > 0) words.Add(new LyricWord { StartIndex = text.Length, Length = word.Length, StartSeconds = at / 1000, EndSeconds = (at + length) / 1000 });
                     text += word; covered = piece.Index + piece.Length;

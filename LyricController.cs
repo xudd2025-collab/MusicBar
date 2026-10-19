@@ -52,6 +52,10 @@ namespace MusicBar
         private string observedTranslation = "";
         private string documentPlaybackKey = "";
         private bool automaticDocument;
+        private bool NeedsAutomaticLyrics
+        {
+            get { return Document == null || automaticDocument && !Document.HasTimedLyrics; }
+        }
         private bool lookupHasReliableDuration;
         private double lookupDuration;
         private double pendingDuration;
@@ -143,7 +147,7 @@ namespace MusicBar
                     Current = Next = CurrentTranslation = ""; RemainingLineSeconds = 0;
                     BeginLoad();
                 }
-                else if (Document == null && !Searching && !ManualMode && Settings.OnlineLyrics && Snapshot.IsPlaying && utcNow >= nextLyricRetryUtc)
+                else if (NeedsAutomaticLyrics && !Searching && !ManualMode && Settings.OnlineLyrics && Snapshot.IsPlaying && utcNow >= nextLyricRetryUtc)
                 {
                     BeginLoad();
                 }
@@ -234,7 +238,13 @@ namespace MusicBar
                 if (!keepExisting) { Document = document; documentPlaybackKey = requestedTrack.PlaybackKey; automaticDocument = true; }
                 Message = keepExisting ? "继续使用已连接的歌词 · " + Document.Source : document == null ? "未找到可靠匹配，请搜索选择歌词或导入 LRC。" : document.HasTimedLyrics ? "歌词已连接 · " + document.Source : string.IsNullOrWhiteSpace(document.PlainText) ? document.Source + "，可导入本地 LRC。" : "这首歌没有逐行时间标记，可导入带时间轴的 LRC。";
                 consecutiveFailures = 0;
-                if (Document == null) { inconclusiveAttempts++; ScheduleRetry(false); }
+                if (NeedsAutomaticLyrics)
+                {
+                    inconclusiveAttempts = Math.Min(3, inconclusiveAttempts + 1);
+                    int delay = ScheduleRetry(false);
+                    Message += Environment.NewLine + "约 " + delay + " 秒后在播放时自动重试。";
+                }
+                else inconclusiveAttempts = 0;
             }
             catch (OperationCanceledException)
             {
@@ -259,8 +269,9 @@ namespace MusicBar
         private void RecordServiceFailure(string detail)
         {
             consecutiveFailures = Math.Min(5, consecutiveFailures + 1);
-            ScheduleRetry(true);
+            int delay = ScheduleRetry(true);
             Message = (Document != null && Document.HasTimedLyrics ? "刷新暂未完成，继续显示已连接的歌词。" : "在线歌词接口暂时不可用，将在播放时自动重试；也可搜索或导入 LRC。") + Environment.NewLine + detail;
+            if (NeedsAutomaticLyrics) Message += Environment.NewLine + "约 " + delay + " 秒后在播放时自动重试。";
         }
         public void Reload()
         {
@@ -281,24 +292,30 @@ namespace MusicBar
             CancelRequest();
             nextLyricRetryUtc = DateTime.MaxValue;
             var result = Repository.ClearCache();
-            if (Document != null) Volatile.Write(ref Document.NativeReplacement, null);
             Message = result.FailedFiles == 0 ? "歌词缓存已清空；当前显示的歌词继续保留。" :
                 "已清理可删除的歌词缓存，另有 " + result.FailedFiles + " 个文件暂时无法删除。";
+            if (Snapshot.HasTrack && !ManualMode && Settings.OnlineLyrics && NeedsAutomaticLyrics)
+            {
+                nextLyricRetryUtc = DateTime.UtcNow;
+                Message += Environment.NewLine + "尚未获取到歌词，将在播放时自动重试。";
+            }
             UpdateLine(); Notify();
             return result;
         }
-        private void ScheduleRetry(bool serviceFailure)
+        private int ScheduleRetry(bool serviceFailure)
         {
-            // An unavailable service can recover later in the same song. Back off
-            // without permanently disabling recovery after three failed requests.
-            // A successful search with no safe match still has a bounded budget.
+            // Both unavailable services and inconclusive results may recover
+            // within the same song. Limit request frequency, never the total
+            // recovery attempts. Manual documents are excluded by the caller.
+            int delay;
             if (serviceFailure)
             {
-                double[] delays = { 2, 8, 24, 60, 120 };
-                nextLyricRetryUtc = DateTime.UtcNow.AddSeconds(delays[Math.Max(0, consecutiveFailures - 1)]);
+                int[] delays = { 2, 8, 24, 60, 120 };
+                delay = delays[Math.Max(0, consecutiveFailures - 1)];
             }
-            else if (inconclusiveAttempts < 3)
-                nextLyricRetryUtc = DateTime.UtcNow.AddSeconds(inconclusiveAttempts == 1 ? 8 : 24);
+            else delay = inconclusiveAttempts <= 1 ? 8 : inconclusiveAttempts == 2 ? 24 : 60;
+            nextLyricRetryUtc = DateTime.UtcNow.AddSeconds(delay);
+            return delay;
         }
         public void RestoreAutomatic()
         {
@@ -359,14 +376,6 @@ namespace MusicBar
         public void UsePlayerClock() { ManualMode = false; ManualPlaying = false; UpdateLine(); Notify(); }
         private void UpdateLine()
         {
-            LyricDocument currentDocument = Document;
-            LyricDocument native = currentDocument == null ? null : Volatile.Read(ref currentDocument.NativeReplacement);
-            if (native != null && automaticDocument && !ManualMode && Settings.OnlineLyrics &&
-                documentPlaybackKey == Snapshot.PlaybackKey)
-            {
-                Document = native;
-                Message = "歌词已连接 · " + native.Source;
-            }
             if (Document != translatedDocument || (Document != null && observedTranslation != (Document.Translation ?? "")))
             {
                 if (Document != null) LrcParser.EnsureTranslation(Document);

@@ -72,9 +72,6 @@ namespace MusicBar
 
     public sealed class LyricDocument
     {
-        internal LyricDocument NativeReplacement;
-        internal int NativeCompletionStarted;
-        internal System.Threading.Tasks.Task NativeCompletion;
         public List<LyricLine> Lines = new List<LyricLine>();
         public string PlainText = "";
         public string Source = "";

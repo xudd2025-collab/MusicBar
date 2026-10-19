@@ -268,14 +268,34 @@ namespace MusicBar
                 }
             }
 
-            // Explicitly use a readable Chinese family when the chosen Latin font
-            // has no CJK glyphs, instead of GDI+'s opaque default-font fallback.
+            // Glyph paths do not reliably use Windows' script font fallback.
+            // Keep a capable user font, otherwise select an installed family
+            // which actually covers the script before constructing its path.
             private static string ReadableFont(string text, string fontName, bool bold)
             {
-                if (fontName == "Microsoft YaHei UI" || fontName == "等线") return fontName;
-                string cjk = "";
-                foreach (char character in text) if (character >= '\u2e80' && character <= '\u9fff') cjk += character;
-                if (cjk.Length == 0) return fontName;
+                string cjk = "", tibetan = "";
+                foreach (char character in text)
+                {
+                    if (character >= '\u2e80' && character <= '\u9fff') cjk += character;
+                    else if (character >= '\u0f00' && character <= '\u0fff' && !char.IsWhiteSpace(character)) tibetan += character;
+                }
+                if (tibetan.Length > 0)
+                {
+                    string required = tibetan + cjk;
+                    if (FontHasGlyphs(required, fontName, bold)) return fontName;
+                    // Himalaya ships with Windows' Tibetan support. Check each
+                    // family rather than silently substituting an absent font.
+                    foreach (string fallback in new[] { "Microsoft Himalaya", "Noto Serif Tibetan", "Noto Sans Tibetan", "Jomolhari", "Tibetan Machine Uni" })
+                        if (FontHasGlyphs(required, fallback, bold)) return fallback;
+                }
+                // Preserve the existing readable Chinese fallback and independent
+                // translation font; selecting a Tibetan family must not erase CJK.
+                if (cjk.Length == 0 || fontName == "Microsoft YaHei UI" || fontName == "等线") return fontName;
+                return FontHasGlyphs(cjk, fontName, bold) ? fontName : "Microsoft YaHei UI";
+            }
+
+            private static bool FontHasGlyphs(string text, string fontName, bool bold)
+            {
                 IntPtr dc = IntPtr.Zero, nativeFont = IntPtr.Zero, previous = IntPtr.Zero;
                 try
                 {
@@ -283,15 +303,15 @@ namespace MusicBar
                     using (var font = new Font(family, 16, bold && family.IsStyleAvailable(FontStyle.Bold) ? FontStyle.Bold : FontStyle.Regular))
                     {
                         dc = OverlayNative.CreateCompatibleDC(IntPtr.Zero);
-                        if (dc == IntPtr.Zero) return "Microsoft YaHei UI";
+                        if (dc == IntPtr.Zero) return false;
                         nativeFont = font.ToHfont(); previous = OverlayNative.SelectObject(dc, nativeFont);
-                        var glyphs = new ushort[cjk.Length];
-                        if (OverlayNative.GetGlyphIndices(dc, cjk, cjk.Length, glyphs, 1) == uint.MaxValue) return "Microsoft YaHei UI";
-                        foreach (ushort glyph in glyphs) if (glyph == 0xffff || glyph == 0) return "Microsoft YaHei UI";
+                        var glyphs = new ushort[text.Length];
+                        if (OverlayNative.GetGlyphIndices(dc, text, text.Length, glyphs, 1) == uint.MaxValue) return false;
+                        foreach (ushort glyph in glyphs) if (glyph == 0xffff || glyph == 0) return false;
                     }
-                    return fontName;
+                    return true;
                 }
-                catch (ArgumentException) { return "Microsoft YaHei UI"; }
+                catch (ArgumentException) { return false; }
                 finally
                 {
                     if (previous != IntPtr.Zero && dc != IntPtr.Zero) OverlayNative.SelectObject(dc, previous);
