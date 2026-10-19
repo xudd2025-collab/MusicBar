@@ -1,15 +1,15 @@
 {
-  "version": "1.0.23",
-  "notes": "- 加快 QQ 首次获取歌词：普通搜索、备用来源和原平台公开目录并行匹配，优先显示可靠结果，避免播放很久后歌词才出现。继续核对歌名、歌手、专辑、时长和唯一录音。\n- 修复部分日文／英文歌曲无法匹配歌词的问题，支持平台提供的正式双语专辑名，以及播放器仅显示主歌手的合作歌曲。\n- 修复 QQ 备用歌词与原平台译文、时间轴不一致的问题：确认同一录音后，将原文、译文和逐字时间一起切回 QQ 来源；已有备用缓存也可自动补查。\n- 歌词与自动匹配缓存长期保存在本地，退出、重启和升级后继续使用；关闭在线获取也能读取已有缓存。「歌词管理」新增数量、占用与手动清理入口，清理保留手动导入／选择的歌词、设置和当前播放。\n- 新增 8 套原文／译文配色，支持纯色与渐变切换，渐变尾色可分别调整。渐变随整句字形滚动，逐字进度不会改变配色位置。\n- 新增深色颜色库，提供 32 个命名色卡、最近使用、HEX/RGB 编辑与前后预览；确认后保存。\n- 修复全局快捷键只能打开设置的问题，F1 等已保存的快捷键可反复显示／隐藏窗口，后台歌词同步继续运行。\n- 修复「左移／右移」缺少可见反馈的问题：无歌词时自动显示定位预览，锁定状态下可微调；从实际可见位置移动，边界处反向点击立即生效，位置自动保存。\r\n- 新增「每行最多字数」，可输入 0–200，0 表示不限；原文与译文按播放进度一起分段，暂停、拖动和关闭逐字变色时均可使用。\n- 新增首次作者提示与免费开源声明，任务栏歌词旁和设置窗口显示作者。成功进入原 GitHub 项目后，可在本机永久关闭提示和水印。\n- 升级保留外观、快捷键、隐藏图标偏好、歌词缓存和手动绑定。安装包与便携包不包含用户数据及开发检查程序。",
-  "release_url": "https://github.com/xudd2025-collab/MusicBar/releases/tag/v1.0.23",
+  "version": "1.0.24",
+  "notes": "- 修复部分 QQ 歌曲无法自动获取歌词的问题：优先按歌名搜索，兼容中文别名和平台正式专辑别名；公开目录可先发现简写歌名，再用官方详情核对歌名、歌手、专辑和时长，保留电影版等版本区分。\n- 修复找不到歌词后停止寻找的问题：接口失败、暂无匹配、空歌词或缺少时间轴时持续自动重试，逐步延长间隔；已有空缓存和无时间轴缓存也会重新获取。\n- 修复清理缓存后，尚未获取成功的歌曲不再继续查找的问题；保留当前可用歌词、手动绑定和设置。\n- 修复 QQ 逐字歌词含零时长字块时整句被漏掉的问题，避免正常演唱过程中歌词突然消失；已有缓存自动使用修复后的解析。\n- 自动歌词严格使用当前播放器的平台：QQ 音乐使用 QQ 原文、译文和时间轴，网易云使用网易云歌词；停止自动使用旧的跨平台匹配缓存。\n- 修复《难解（难舍难分难解）》等带括号完整歌名匹配不到 QQ 原版、缺少中文译文的问题；QQ 目录优先查完整歌名，仍严格核对歌手、专辑与时长。\n- 修复所选字体不支持藏文时任务栏原文缺字的问题，自动选用本机支持藏文的字体，保留独立中文译文字体和已有字体设置。",
+  "release_url": "https://github.com/xudd2025-collab/MusicBar/releases/tag/v1.0.24",
   "installer": {
-    "name": "MusicBar-Setup-1.0.23.exe",
-    "sha256": "0d12c35aa5232173fa90f5c2dd1c8c89de863a46435e7ef016fd0e6acfe0922b",
+    "name": "MusicBar-Setup-1.0.24.exe",
+    "sha256": "3dfe0350dc19fc2bf17a89e71ef95f10dd7ad6723249c7af1ad1327b19c56811",
     "urls": [
-      "https://github.com/xudd2025-collab/MusicBar/releases/download/v1.0.23/MusicBar-Setup-1.0.23.exe",
-      "https://raw.githubusercontent.com/xudd2025-collab/MusicBar/updates/releases/v1.0.23/MusicBar-Setup-1.0.23.exe",
-      "https://cdn.jsdelivr.net/gh/xudd2025-collab/MusicBar@updates/releases/v1.0.23/MusicBar-Setup-1.0.23.exe",
-      "https://fastly.jsdelivr.net/gh/xudd2025-collab/MusicBar@updates/releases/v1.0.23/MusicBar-Setup-1.0.23.exe"
+      "https://github.com/xudd2025-collab/MusicBar/releases/download/v1.0.24/MusicBar-Setup-1.0.24.exe",
+      "https://raw.githubusercontent.com/xudd2025-collab/MusicBar/updates/releases/v1.0.24/MusicBar-Setup-1.0.24.exe",
+      "https://cdn.jsdelivr.net/gh/xudd2025-collab/MusicBar@updates/releases/v1.0.24/MusicBar-Setup-1.0.24.exe",
+      "https://fastly.jsdelivr.net/gh/xudd2025-collab/MusicBar@updates/releases/v1.0.24/MusicBar-Setup-1.0.24.exe"
     ]
   }
 }
