@@ -200,6 +200,10 @@ namespace MusicBar
         [DataMember] public bool OnlineLyrics = true;
         [DataMember] public bool AutoCheckUpdates = true;
         [DataMember] public bool HideWhenPaused = true;
+        // Keep the existing fullscreen hiding behavior for settings written by older builds.
+        // Users can opt in from the behavior settings page when they want lyrics over a
+        // fullscreen player or game.
+        [DataMember] public bool ShowWhenFullscreen = false;
         [DataMember] public bool HideInstrumental = true;
         [DataMember] public double InstrumentalHoldSeconds = 10;
         [DataMember] public bool TwoLines = false;
@@ -236,6 +240,11 @@ namespace MusicBar
         [DataMember] public int HorizontalOffset = 0;
         [DataMember] public int VerticalOffset = 0;
         [DataMember] public int MonitorIndex = 0;
+        // Fractional edge position and the display geometry it was captured from.
+        [DataMember] public double PositionRatio = .5;
+        [DataMember] public int PositionReferenceLength = 0;
+        [DataMember] public float PositionReferenceScale = 0;
+        [DataMember] public bool HasPositionRatio = false;
         [DataMember] public string Alignment = "left";
         [DataMember] public double OffsetSeconds = 0;
         [DataMember] public MusicPlayer PreferredPlayer = MusicPlayer.None;
@@ -257,6 +266,7 @@ namespace MusicBar
             AutoCheckUpdates = true;
             HideInstrumental = true;
             HideWhenPaused = true;
+            ShowWhenFullscreen = false;
             InstrumentalHoldSeconds = 10;
             KaraokeEnabled = true;
             BoldLyrics = true;
@@ -273,6 +283,11 @@ namespace MusicBar
             MaxCharactersPerLine = Math.Max(0, Math.Min(200, MaxCharactersPerLine));
             HorizontalOffset = Math.Max(-20000, Math.Min(20000, HorizontalOffset));
             VerticalOffset = Math.Max(-2000, Math.Min(2000, VerticalOffset));
+            if (double.IsNaN(PositionRatio) || double.IsInfinity(PositionRatio)) PositionRatio = .5;
+            PositionRatio = Math.Max(0, Math.Min(1, PositionRatio));
+            PositionReferenceLength = Math.Max(0, Math.Min(20000, PositionReferenceLength));
+            if (float.IsNaN(PositionReferenceScale) || float.IsInfinity(PositionReferenceScale) || PositionReferenceScale < 0 || PositionReferenceScale > 8)
+                PositionReferenceScale = 0;
             OffsetSeconds = Math.Max(-120, Math.Min(120, OffsetSeconds));
             if (double.IsNaN(InstrumentalHoldSeconds) || double.IsInfinity(InstrumentalHoldSeconds)) InstrumentalHoldSeconds = 10;
             InstrumentalHoldSeconds = Math.Max(3, Math.Min(20, InstrumentalHoldSeconds));

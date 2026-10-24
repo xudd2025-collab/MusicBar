@@ -27,20 +27,33 @@ namespace MusicBar
                         }
                         return;
                     }
-                    var store = new SettingsStore(AppDomain.CurrentDomain.BaseDirectory);
-                    using (var controller = new LyricController(store.Load(), store))
-                    using (var overlay = new LyricOverlay())
-                    using (var form = new MainForm(controller, overlay, automatic))
+                    // Create the activation event immediately after taking the mutex.  Previously it
+                    // was created only after the controller, overlay and form were built.  A second
+                    // launch during that window could not signal the first instance, making the user
+                    // click the shortcut twice before settings appeared.
                     using (var openSettings = new EventWaitHandle(false, EventResetMode.AutoReset, "Local\\MusicBarOpenSettings"))
                     {
-                        form.Shown += delegate { controller.Start(); };
-                        var registration = ThreadPool.RegisterWaitForSingleObject(openSettings, delegate
+                        var store = new SettingsStore(AppDomain.CurrentDomain.BaseDirectory);
+                        using (var controller = new LyricController(store.Load(), store))
+                        using (var overlay = new LyricOverlay())
+                        using (var form = new MainForm(controller, overlay, automatic))
                         {
-                            try { if (!form.IsDisposed && form.IsHandleCreated) form.BeginInvoke((MethodInvoker)delegate { if (!form.IsDisposed) form.RestoreWindow(); }); }
-                            catch (InvalidOperationException) { }
-                        }, null, Timeout.Infinite, false);
-                        try { Application.Run(form); }
-                        finally { registration.Unregister(null); }
+                            form.Shown += delegate { controller.Start(); };
+                            RegisteredWaitHandle registration = null;
+                            // Register after WinForms has created the form handle.  The event is
+                            // kept signaled until then, so a launch during startup cannot be
+                            // consumed by a callback that has nowhere to post its activation.
+                            form.Load += delegate
+                            {
+                                registration = ThreadPool.RegisterWaitForSingleObject(openSettings, delegate
+                                {
+                                    try { if (!form.IsDisposed && form.IsHandleCreated) form.BeginInvoke((MethodInvoker)delegate { if (!form.IsDisposed) form.RestoreWindow(); }); }
+                                    catch (InvalidOperationException) { }
+                                }, null, Timeout.Infinite, false);
+                            };
+                            try { Application.Run(form); }
+                            finally { if (registration != null) registration.Unregister(null); }
+                        }
                     }
                     mutex.ReleaseMutex();
                 }

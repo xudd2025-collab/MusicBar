@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Net.NetworkInformation;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -49,6 +50,8 @@ namespace MusicBar
         private int lastLineIndex = -2;
         private ListBox lyricLines;
         private CheckBox startupSwitch;
+        private CheckBox fullscreenSwitch;
+        private CheckBox appearanceFullscreenSwitch;
         private Label startupHint;
         private readonly bool startInTray;
         private readonly AppUpdateService updateService;
@@ -57,6 +60,7 @@ namespace MusicBar
         private readonly CancellationTokenSource updateLifetime = new CancellationTokenSource();
         private readonly System.Windows.Forms.Timer updateTimer = new System.Windows.Forms.Timer { Interval = 1000 };
         private RoundedButton versionButton;
+        private RoundedButton updateNavigationButton;
         private Button checkUpdateButton, downloadUpdateButton;
         private Label updateStatus, updateVersion, updateNotes, updateProgressText;
         private DownloadProgress updateProgress;
@@ -64,6 +68,17 @@ namespace MusicBar
         private string downloadedUpdate = "";
         private UpdateRelease downloadedRelease;
         private DateTime nextUpdateCheck = DateTime.UtcNow.AddSeconds(5), lastUpdateCheck = DateTime.MinValue;
+
+        private const int SwRestore = 9;
+
+        [DllImport("user32.dll")]
+        private static extern bool ShowWindow(IntPtr window, int command);
+        [DllImport("user32.dll")]
+        private static extern bool BringWindowToTop(IntPtr window);
+        [DllImport("user32.dll")]
+        private static extern bool SetForegroundWindow(IntPtr window);
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetForegroundWindow();
 
         public MainForm(LyricController controller, LyricOverlay overlay, bool startInTray = false)
         {
@@ -105,6 +120,10 @@ namespace MusicBar
                 controller.Settings.VerticalOffset = args.VerticalOffset;
                 controller.Settings.MonitorIndex = args.MonitorIndex;
                 controller.Settings.Alignment = args.Alignment;
+                controller.Settings.PositionRatio = args.PositionRatio;
+                controller.Settings.PositionReferenceLength = args.PositionReferenceLength;
+                controller.Settings.PositionReferenceScale = args.PositionReferenceScale;
+                controller.Settings.HasPositionRatio = args.HasPositionRatio;
                 SyncPositionControls(); controller.Store.Save(controller.Settings); controller.Notify();
             };
             controller.Changed += ControllerChanged;
@@ -197,6 +216,11 @@ namespace MusicBar
             {
                 int index = i;
                 var button = Theme.Button(names[i], false); button.Width = 152; button.Height = 46; button.TextAlign = ContentAlignment.MiddleLeft; button.Padding = new Padding(18, 0, 0, 0); button.Margin = new Padding(0, 0, 0, 8); ((RoundedButton)button).NavigationButton = true;
+                if (index == 4)
+                {
+                    updateNavigationButton = (RoundedButton)button;
+                    updateNavigationButton.AccessibleDescription = "软件更新；发现新版本时显示提示点";
+                }
                 button.Click += delegate { SelectPage(index); }; sidebar.Controls.Add(button); navigation.Add(button);
             }
             var notice = Theme.Label("关闭窗口后在后台运行\n双击音乐托盘图标返回", 8, Theme.Muted); notice.Size = new Size(152, 58); notice.Margin = new Padding(4, 42, 0, 12); sidebar.Controls.Add(notice);
@@ -248,6 +272,13 @@ namespace MusicBar
             pages[index].BringToFront();
             if (index == 1) UpdatePreview();
             if (index == 2) RefreshLyricCacheInfo();
+            if (index == 4 && controller.Settings.AutoCheckUpdates && !updateBusy && DateTime.UtcNow - lastUpdateCheck > TimeSpan.FromMinutes(1))
+                RefreshUpdatesFromNavigation();
+        }
+
+        private async void RefreshUpdatesFromNavigation()
+        {
+            await CheckForUpdates();
         }
         private void BuildPlugins()
         {
@@ -388,6 +419,7 @@ namespace MusicBar
             preferred.SelectedIndexChanged += delegate { if (!updating) { s.PreferredPlayer = (MusicPlayer)preferred.SelectedIndex; Apply(false); } }; AddSetting(behavior, "播放器选择", preferred, "多个播放器同时播放时按优先级选择。");
             var click = Theme.Check("锁定位置（鼠标穿透）", s.ClickThrough); positionLock = click; click.CheckedChanged += delegate { if (!updating && s.ClickThrough != click.Checked) TogglePositionLock(); }; AddSetting(behavior, "歌词拖动", click, "取消锁定后，可按住歌词左右拖动。");
             var pause = Theme.Check("暂停时隐藏歌词", s.HideWhenPaused); pause.CheckedChanged += delegate { if (!updating) { s.HideWhenPaused = pause.Checked; Apply(false); } }; AddSetting(behavior, "暂停播放", pause, "开启后暂停立即隐藏，继续播放时恢复；关闭则保留当前行。");
+            appearanceFullscreenSwitch = Theme.Check("全屏时显示歌词", s.ShowWhenFullscreen); appearanceFullscreenSwitch.CheckedChanged += delegate { if (!updating) { s.ShowWhenFullscreen = appearanceFullscreenSwitch.Checked; Apply(false); } }; AddSetting(behavior, "全屏播放", appearanceFullscreenSwitch, "开启后全屏视频或游戏前台时仍显示歌词；关闭则沿用全屏自动隐藏。");
             var instrumental = Theme.Check("前奏、间奏和尾奏隐藏歌词", s.HideInstrumental); instrumental.CheckedChanged += delegate { if (!updating) { s.HideInstrumental = instrumental.Checked; Apply(false); } }; AddSetting(behavior, "伴奏片段", instrumental, "空行、间奏标记和制作信息自动隐藏；下一句开始时恢复。");
             var instrumentalHold = Theme.Number(3, 20, (decimal)s.InstrumentalHoldSeconds, 1); instrumentalHold.Increment = 0.5M;
             instrumentalHold.ValueChanged += delegate { if (!updating) { s.InstrumentalHoldSeconds = (double)instrumentalHold.Value; Apply(false); } }; AddSetting(behavior, "长间隔停留（秒）", instrumentalHold, "歌词未标注唱完时间时，长间隔中的旧句按此时间收起；拖长音可调大。");
@@ -627,6 +659,20 @@ namespace MusicBar
                 }
             };
             page.Controls.Add(card);
+            // Keep this high-level behavior visible in 常规设置 as well as in
+            // 歌词外观 → 同步与行为. Both controls read and write the same
+            // AppSettings.ShowWhenFullscreen value.
+            var fullscreenCard = Theme.Card(); fullscreenCard.Height = 126; fullscreenCard.Margin = new Padding(0, 0, 0, 18);
+            var fullscreenTitle = Theme.Label("全屏播放", 13, Theme.Text); fullscreenTitle.Font = Theme.Font(13, FontStyle.Bold); fullscreenTitle.SetBounds(24, 16, 520, 30); fullscreenCard.Controls.Add(fullscreenTitle);
+            fullscreenSwitch = Theme.Check("全屏时仍显示歌词", controller.Settings.ShowWhenFullscreen); fullscreenSwitch.Location = new Point(24, 54); fullscreenSwitch.AccessibleName = "全屏时显示歌词"; fullscreenCard.Controls.Add(fullscreenSwitch);
+            var fullscreenHint = Theme.Label("开启后，全屏视频或游戏在前台时也会显示任务栏歌词。", 9, Theme.Muted); fullscreenHint.SetBounds(24, 88, 730, 28); fullscreenHint.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right; fullscreenCard.Controls.Add(fullscreenHint);
+            fullscreenSwitch.CheckedChanged += delegate
+            {
+                if (updating) return;
+                controller.Settings.ShowWhenFullscreen = fullscreenSwitch.Checked;
+                Apply(false);
+            };
+            page.Controls.Add(fullscreenCard);
             var access = Theme.Card(); access.Height = 228; access.Margin = new Padding(0, 0, 0, 18);
             var hiddenIcon = Theme.Check("隐藏应用图标（任务栏和托盘）", controller.Settings.HideTaskbarIcon); hiddenIcon.Location = new Point(24, 18); access.Controls.Add(hiddenIcon);
             hiddenIcon.CheckedChanged += delegate { if (!updating) { controller.Settings.HideTaskbarIcon = hiddenIcon.Checked; ApplyApplicationIconVisibility(); controller.Store.Save(controller.Settings); } };
@@ -748,6 +794,11 @@ namespace MusicBar
         {
             var latest = updateService.Latest; bool available = latest != null && latest.IsNew;
             versionButton.NotificationDot = available; versionButton.Invalidate();
+            if (updateNavigationButton != null)
+            {
+                updateNavigationButton.NotificationDot = available;
+                updateNavigationButton.Invalidate();
+            }
             versionButton.AccessibleDescription = available ? "发现新版本 v" + latest.Version : "点击查看软件更新";
             updateVersion.Text = "当前版本 " + AppUpdateService.VersionLabel + (available ? "    →    v" + latest.Version : "");
             updateStatus.Text = updateService.Status;
@@ -882,6 +933,15 @@ namespace MusicBar
             if (IsDisposed) return;
             var snapshot = controller.Snapshot;
             var s = controller.Settings;
+            if ((fullscreenSwitch != null && fullscreenSwitch.Checked != s.ShowWhenFullscreen) ||
+                (appearanceFullscreenSwitch != null && appearanceFullscreenSwitch.Checked != s.ShowWhenFullscreen))
+            {
+                bool previousUpdating = updating;
+                updating = true;
+                if (fullscreenSwitch != null) fullscreenSwitch.Checked = s.ShowWhenFullscreen;
+                if (appearanceFullscreenSwitch != null) appearanceFullscreenSwitch.Checked = s.ShowWhenFullscreen;
+                updating = previousUpdating;
+            }
             if (positionPreview && s.OverlayEnabled && !string.IsNullOrWhiteSpace(controller.Current) &&
                 (!s.HideWhenPaused || (controller.ManualMode ? controller.ManualPlaying : snapshot.IsPlaying)))
             {
@@ -1132,11 +1192,31 @@ namespace MusicBar
             ShowInTaskbar = !controller.Settings.HideTaskbarIcon;
             tray.Visible = !exiting && !controller.Settings.HideTaskbarIcon;
         }
-        public void RestoreWindow() { ApplyApplicationIconVisibility(); Show(); WindowState = FormWindowState.Normal; Activate(); }
+        public void RestoreWindow()
+        {
+            if (exiting || IsDisposed) return;
+            ApplyApplicationIconVisibility();
+            // The activation request can arrive while another application owns the foreground
+            // window (for example when a second MusicBar shortcut is launched).  Show/Activate
+            // alone may leave this form behind that window, making the first key press appear
+            // ineffective.  Restore and explicitly raise the existing handle in one UI turn.
+            if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
+            if (!Visible) Show();
+            WindowState = FormWindowState.Normal;
+            if (!IsHandleCreated) return;
+            ShowWindow(Handle, SwRestore);
+            BringWindowToTop(Handle);
+            Activate();
+            SetForegroundWindow(Handle);
+        }
         private void ToggleWindow()
         {
             if (authorDialog != null && !authorDialog.IsDisposed) { authorDialog.Activate(); return; }
-            if (Visible && WindowState != FormWindowState.Minimized) { ApplyApplicationIconVisibility(); Hide(); }
+            // A visible settings window may simply be behind the music player or another app.
+            // Treat the first global-hotkey press as an activation in that case; otherwise the
+            // old visibility-only test hid it first and users had to press the shortcut again.
+            bool foreground = IsHandleCreated && GetForegroundWindow() == Handle;
+            if (Visible && WindowState != FormWindowState.Minimized && foreground) { ApplyApplicationIconVisibility(); Hide(); }
             else RestoreWindow();
         }
         public void ExitApplication() { exiting = true; tray.Visible = false; Close(); Application.Exit(); }

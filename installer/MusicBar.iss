@@ -1,5 +1,5 @@
 #ifndef AppVersion
-  #define AppVersion "1.0.24"
+  #define AppVersion "1.0.25"
 #endif
 #ifndef SourceDir
   #define SourceDir "..\dist\stage\MusicBar"
@@ -13,7 +13,7 @@ AppId={{774672F7-379B-48D6-BDFE-563C496290BA}
 AppName=MusicBar
 AppVersion={#AppVersion}
 AppVerName=MusicBar {#AppVersion}
-AppPublisher=MusicBar contributors
+AppPublisher=MusicBar 开源社区
 DefaultDirName={localappdata}\Programs\MusicBar
 DefaultGroupName=MusicBar
 DisableProgramGroupPage=yes
@@ -35,7 +35,6 @@ VersionInfoVersion={#AppVersion}.0
 
 [Languages]
 Name: "chinesesimp"; MessagesFile: "Languages\ChineseSimplified.isl"
-Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "快捷方式："; Flags: unchecked

@@ -105,6 +105,235 @@ namespace MusicBar
             return true;
         }
 
+        // A borderless full-screen app can hide or move the taskbar off-screen. The caller
+        // must first confirm that the foreground window is actually full-screen.
+        internal static bool TryCreateFullscreenSnapshot(int monitorIndex, IntPtr overlay, out TaskbarSnapshot snapshot)
+        {
+            return TryCreateFullscreenSnapshot(monitorIndex, overlay, null, null, out snapshot);
+        }
+
+        internal static bool TryCreateFullscreenSnapshot(int monitorIndex, IntPtr overlay, TaskbarSnapshot reference,
+            AppSettings settings, out TaskbarSnapshot snapshot)
+        {
+            snapshot = null;
+            Screen[] screens = Screen.AllScreens;
+            if (screens.Length == 0) return false;
+            Screen screen = monitorIndex >= 0 && monitorIndex < screens.Length ? screens[monitorIndex] : Screen.PrimaryScreen;
+            if (screen == null) screen = screens[0];
+            Rectangle monitor = screen.Bounds;
+            if (!ForegroundIsFullscreen(monitor, overlay)) return false;
+
+            float scale = OverlayNative.ScaleForMonitor(monitor, overlay);
+            if (scale <= 0 && reference != null && reference.MonitorBounds == monitor && reference.Scale > 0) scale = reference.Scale;
+            if (scale <= 0) scale = 1f;
+
+            int edge = -1;
+            int thickness = 0;
+            Rectangle taskbar;
+            if (OverlayNative.TryGetTaskbarBounds(monitor, out taskbar))
+            {
+                edge = EdgeForRectangle(taskbar, monitor);
+                int observedThickness = edge == 0 || edge == 2 ? taskbar.Width : taskbar.Height;
+                // An auto-hidden taskbar can leave only a 1–2 px reveal strip on screen.
+                // Keep its edge, but do not mistake the reveal strip for the taskbar's
+                // actual thickness or it will produce a nearly invisible lyric surface.
+                thickness = ReliableTaskbarThickness(observedThickness, scale);
+            }
+            if (edge < 0)
+            {
+                int workAreaThickness;
+                edge = EdgeFromWorkArea(monitor, screen.WorkingArea, out workAreaThickness);
+                if (edge >= 0) thickness = workAreaThickness;
+            }
+
+            // AppBar auto-hide can leave the work area equal to the whole monitor. Ask
+            // Explorer for its actual edge before falling back to the last observed edge.
+            if (edge < 0) edge = OverlayNative.AutoHideTaskbarEdge(monitor);
+            if (edge < 0 && reference != null) edge = reference.Edge;
+            if (edge < 0 || edge > 3) edge = 3; // Windows' default taskbar anchor.
+
+            if (thickness <= 0 && reference != null && reference.Scale > 0)
+            {
+                int referenceThickness = reference.Horizontal ? reference.Bounds.Height : reference.Bounds.Width;
+                thickness = (int)Math.Round(referenceThickness / reference.Scale * scale);
+            }
+            int lyricThickness = FullscreenFallbackThickness(settings, scale);
+            snapshot = CreateFullscreenSnapshot(monitor, screen.WorkingArea, scale, edge, thickness, lyricThickness);
+            snapshot.Handle = IntPtr.Zero;
+            return true;
+        }
+
+        // Pure geometry helper shared with checks: taskbar thickness is taken from the
+        // work-area inset or the last observed taskbar. Only when neither exists do we
+        // size the temporary edge surface to the current lyric typography.
+        internal static TaskbarSnapshot CreateFullscreenSnapshot(Rectangle monitor, Rectangle workingArea,
+            float scale, int edge, int preferredThickness, int fallbackThickness)
+        {
+            if (monitor.Width <= 0 || monitor.Height <= 0) return new TaskbarSnapshot();
+            if (scale <= 0 || float.IsNaN(scale) || float.IsInfinity(scale)) scale = 1f;
+            if (edge < 0 || edge > 3)
+            {
+                int ignored;
+                edge = EdgeFromWorkArea(monitor, workingArea, out ignored);
+                if (edge < 0) edge = 3;
+            }
+
+            int workThickness;
+            int workEdge = EdgeFromWorkArea(monitor, workingArea, out workThickness);
+            if (workEdge == edge && workThickness > 0) preferredThickness = workThickness;
+            int maxThickness = edge == 0 || edge == 2 ? monitor.Width : monitor.Height;
+            int thickness = preferredThickness > 0 ? preferredThickness : fallbackThickness;
+            thickness = Math.Max(1, Math.Min(maxThickness, thickness));
+
+            Rectangle bounds;
+            if (edge == 0) bounds = new Rectangle(monitor.Left, monitor.Top, thickness, monitor.Height);
+            else if (edge == 1) bounds = new Rectangle(monitor.Left, monitor.Top, monitor.Width, thickness);
+            else if (edge == 2) bounds = new Rectangle(monitor.Right - thickness, monitor.Top, thickness, monitor.Height);
+            else bounds = new Rectangle(monitor.Left, monitor.Bottom - thickness, monitor.Width, thickness);
+
+            return new TaskbarSnapshot
+            {
+                Bounds = bounds, MonitorBounds = monitor, WorkingArea = workingArea,
+                Scale = scale, Horizontal = edge == 1 || edge == 3, Edge = edge, AutoHide = false
+            };
+        }
+
+        internal static List<Rectangle> MapOccupied(TaskbarSnapshot source, TaskbarSnapshot target, IList<Rectangle> occupied)
+        {
+            List<Rectangle> mapped = new List<Rectangle>();
+            if (source == null || target == null || occupied == null || source.MonitorBounds.Width <= 0 || source.MonitorBounds.Height <= 0) return mapped;
+            Rectangle from = source.MonitorBounds, to = target.MonitorBounds;
+            foreach (Rectangle rectangle in occupied)
+            {
+                Rectangle clipped = Rectangle.Intersect(rectangle, from);
+                if (clipped.Width <= 0 || clipped.Height <= 0) continue;
+                int left = to.Left + (int)Math.Round((clipped.Left - from.Left) * (double)to.Width / from.Width);
+                int top = to.Top + (int)Math.Round((clipped.Top - from.Top) * (double)to.Height / from.Height);
+                int right = to.Left + (int)Math.Round((clipped.Right - from.Left) * (double)to.Width / from.Width);
+                int bottom = to.Top + (int)Math.Round((clipped.Bottom - from.Top) * (double)to.Height / from.Height);
+                Rectangle mappedRectangle = Rectangle.Intersect(Rectangle.FromLTRB(left, top, Math.Max(left + 1, right), Math.Max(top + 1, bottom)), target.Bounds);
+                if (mappedRectangle.Width > 0 && mappedRectangle.Height > 0) mapped.Add(mappedRectangle);
+            }
+            return mapped;
+        }
+
+        internal static int PositionAtRatio(TaskbarSnapshot bar, OverlayLayout layout, double ratio)
+        {
+            if (bar == null || layout == null || layout.Bounds.IsEmpty) return 0;
+            ratio = double.IsNaN(ratio) || double.IsInfinity(ratio) ? .5 : Math.Max(0, Math.Min(1, ratio));
+            int start = bar.Horizontal ? bar.Bounds.Left : bar.Bounds.Top;
+            int barLength = bar.Horizontal ? bar.Bounds.Width : bar.Bounds.Height;
+            int lyricLength = bar.Horizontal ? layout.Bounds.Width : layout.Bounds.Height;
+            int travel = Math.Max(0, barLength - lyricLength);
+            return start + (int)Math.Round(travel * ratio);
+        }
+
+        internal static void ApplyPositionRatio(TaskbarSnapshot bar, OverlayLayout layout, double ratio)
+        {
+            if (bar == null || layout == null || layout.Bounds.IsEmpty) return;
+            int position = PositionAtRatio(bar, layout, ratio);
+            Rectangle bounds = layout.Bounds;
+            if (bar.Horizontal)
+            {
+                int maxLeft = bar.Bounds.Right - bounds.Width;
+                bounds.X = Math.Max(bar.Bounds.Left, Math.Min(maxLeft, position));
+            }
+            else
+            {
+                int maxTop = bar.Bounds.Bottom - bounds.Height;
+                bounds.Y = Math.Max(bar.Bounds.Top, Math.Min(maxTop, position));
+            }
+            layout.Bounds = bounds;
+        }
+
+        internal static double PositionRatio(TaskbarSnapshot bar, OverlayLayout layout)
+        {
+            if (bar == null || layout == null || layout.Bounds.IsEmpty) return .5;
+            int start = bar.Horizontal ? bar.Bounds.Left : bar.Bounds.Top;
+            int barLength = bar.Horizontal ? bar.Bounds.Width : bar.Bounds.Height;
+            int lyricLength = bar.Horizontal ? layout.Bounds.Width : layout.Bounds.Height;
+            int travel = barLength - lyricLength;
+            if (travel <= 0) return .5;
+            int position = bar.Horizontal ? layout.Bounds.Left : layout.Bounds.Top;
+            return Math.Max(0, Math.Min(1, (position - start) / (double)travel));
+        }
+
+        // A fullscreen player may hide the taskbar or cause Explorer to report a different
+        // edge surface. Reuse the last visible lyric coordinates on the same display. When
+        // the display geometry changes, map both axes proportionally across the monitor.
+        internal static void ApplyRememberedLocation(Rectangle sourceMonitor, OverlayLayout sourceLayout,
+            Rectangle targetMonitor, OverlayLayout targetLayout)
+        {
+            if (sourceLayout == null || targetLayout == null || sourceLayout.Bounds.IsEmpty || targetLayout.Bounds.IsEmpty
+                || sourceMonitor.Width <= 0 || sourceMonitor.Height <= 0 || targetMonitor.Width <= 0 || targetMonitor.Height <= 0)
+                return;
+
+            Rectangle bounds = targetLayout.Bounds;
+            if (sourceMonitor == targetMonitor)
+            {
+                bounds.X = sourceLayout.Bounds.X;
+                bounds.Y = sourceLayout.Bounds.Y;
+            }
+            else
+            {
+                double xRatio = PositionRatioOnAxis(sourceMonitor.Left, sourceMonitor.Width, sourceLayout.Bounds.Left, sourceLayout.Bounds.Width);
+                double yRatio = PositionRatioOnAxis(sourceMonitor.Top, sourceMonitor.Height, sourceLayout.Bounds.Top, sourceLayout.Bounds.Height);
+                bounds.X = targetMonitor.Left + (int)Math.Round(Math.Max(0, targetMonitor.Width - bounds.Width) * xRatio);
+                bounds.Y = targetMonitor.Top + (int)Math.Round(Math.Max(0, targetMonitor.Height - bounds.Height) * yRatio);
+            }
+
+            // If a setting changed the lyric size while fullscreen, keep its top-left anchor
+            // but ensure the resized surface remains on the selected display.
+            bounds.X = Math.Max(targetMonitor.Left, Math.Min(targetMonitor.Right - bounds.Width, bounds.X));
+            bounds.Y = Math.Max(targetMonitor.Top, Math.Min(targetMonitor.Bottom - bounds.Height, bounds.Y));
+            targetLayout.Bounds = bounds;
+        }
+
+        private static double PositionRatioOnAxis(int monitorStart, int monitorLength, int position, int extent)
+        {
+            int travel = Math.Max(0, monitorLength - extent);
+            if (travel == 0) return .5;
+            return Math.Max(0, Math.Min(1, (position - monitorStart) / (double)travel));
+        }
+
+        private static int FullscreenFallbackThickness(AppSettings settings, float scale)
+        {
+            int lines = settings != null && settings.TwoLines ? 2 : 1;
+            float fontSize = settings != null && settings.FontSize >= 10 && settings.FontSize <= 30 ? settings.FontSize : 16f;
+            int logicalHeight = Math.Max(32, (int)Math.Ceiling(fontSize * (96f / 72f) * 1.35f * lines + 8));
+            return Math.Max(1, (int)Math.Ceiling(logicalHeight * scale));
+        }
+
+        internal static int ReliableTaskbarThickness(int observedThickness, float scale)
+        {
+            if (scale <= 0 || float.IsNaN(scale) || float.IsInfinity(scale)) scale = 1f;
+            int minimum = Math.Max(16, (int)Math.Ceiling(16 * scale));
+            return observedThickness >= minimum ? observedThickness : 0;
+        }
+
+        private static int EdgeForRectangle(Rectangle rectangle, Rectangle monitor)
+        {
+            int tolerance = Math.Max(2, (int)Math.Round(Math.Max(monitor.Width, monitor.Height) * .002));
+            int[] distances = { Math.Abs(rectangle.Left - monitor.Left), Math.Abs(rectangle.Top - monitor.Top),
+                Math.Abs(monitor.Right - rectangle.Right), Math.Abs(monitor.Bottom - rectangle.Bottom) };
+            int edge = 0;
+            for (int i = 1; i < distances.Length; i++) if (distances[i] < distances[edge]) edge = i;
+            return distances[edge] <= tolerance ? edge : -1;
+        }
+
+        private static int EdgeFromWorkArea(Rectangle monitor, Rectangle workingArea, out int thickness)
+        {
+            thickness = 0;
+            Rectangle work = Rectangle.Intersect(monitor, workingArea);
+            if (work.Width <= 0 || work.Height <= 0) return -1;
+            int[] insets = { work.Left - monitor.Left, work.Top - monitor.Top, monitor.Right - work.Right, monitor.Bottom - work.Bottom };
+            int edge = 0;
+            for (int i = 1; i < insets.Length; i++) if (insets[i] > insets[edge]) edge = i;
+            if (insets[edge] <= 0) return -1;
+            thickness = insets[edge];
+            return edge;
+        }
+
         internal static OverlayLayout Calculate(TaskbarSnapshot bar, AppSettings settings, IList<Rectangle> occupied)
         {
             OverlayLayout result = new OverlayLayout();
@@ -372,6 +601,89 @@ namespace MusicBar
             catch (DllNotFoundException) { }
             catch (EntryPointNotFoundException) { }
             return 1;
+        }
+
+        internal static float ScaleForMonitor(Rectangle monitor, IntPtr referenceWindow)
+        {
+            IntPtr monitorHandle = IntPtr.Zero;
+            try
+            {
+                Point center = new Point(monitor.Left + monitor.Width / 2, monitor.Top + monitor.Height / 2);
+                monitorHandle = MonitorFromPoint(center, 2);
+            }
+            catch (EntryPointNotFoundException) { }
+
+            bool referenceIsOnTarget = false;
+            float windowScale = 0;
+            if (referenceWindow != IntPtr.Zero && monitorHandle != IntPtr.Zero)
+            {
+                try { referenceIsOnTarget = MonitorFromWindow(referenceWindow, 2) == monitorHandle; }
+                catch (EntryPointNotFoundException) { }
+                if (referenceIsOnTarget) windowScale = ScaleForWindow(referenceWindow, monitorHandle);
+            }
+
+            float monitorScale = 0;
+            if (monitorHandle != IntPtr.Zero)
+            {
+                try
+                {
+                    uint x, y;
+                    if (GetDpiForMonitor(monitorHandle, 0, out x, out y) == 0 && x >= 48 && x <= 768)
+                        monitorScale = x / 96f;
+                }
+                catch (DllNotFoundException) { }
+                catch (EntryPointNotFoundException) { }
+            }
+            return SelectMonitorScale(monitorScale, windowScale, referenceIsOnTarget);
+        }
+
+        internal static float SelectMonitorScale(float monitorScale, float windowScale, bool referenceIsOnTarget)
+        {
+            bool validMonitor = monitorScale >= .5f && monitorScale <= 8f && !float.IsNaN(monitorScale) && !float.IsInfinity(monitorScale);
+            bool validWindow = windowScale >= .5f && windowScale <= 8f && !float.IsNaN(windowScale) && !float.IsInfinity(windowScale);
+            // A window's DPI is authoritative only while that window is on the monitor being
+            // measured. When screens have mixed scaling, prefer the target monitor's own DPI.
+            if (referenceIsOnTarget && validWindow) return windowScale;
+            if (validMonitor) return monitorScale;
+            return referenceIsOnTarget && validWindow ? windowScale : 0f;
+        }
+
+        internal static bool TryGetTaskbarBounds(Rectangle monitor, out Rectangle bounds)
+        {
+            bounds = Rectangle.Empty;
+            Point center = new Point(monitor.Left + monitor.Width / 2, monitor.Top + monitor.Height / 2);
+            IntPtr selectedMonitor = MonitorFromPoint(center, 2);
+            IntPtr found = IntPtr.Zero;
+            EnumWindows(delegate(IntPtr window, IntPtr parameter)
+            {
+                string name = ClassName(window);
+                if ((name == "Shell_TrayWnd" || name == "Shell_SecondaryTrayWnd") && IsWindowVisible(window) && MonitorFromWindow(window, 2) == selectedMonitor)
+                {
+                    found = window;
+                    return false;
+                }
+                return true;
+            }, IntPtr.Zero);
+            if (found == IntPtr.Zero) return false;
+            Rect native;
+            if (!GetWindowRect(found, out native)) return false;
+            Rectangle clipped = Rectangle.Intersect(native.ToRectangle(), monitor);
+            if (clipped.Width <= 0 || clipped.Height <= 0) return false;
+            bounds = clipped;
+            return true;
+        }
+
+        internal static int AutoHideTaskbarEdge(Rectangle monitor)
+        {
+            AppBarData data = new AppBarData();
+            data.Size = (uint)Marshal.SizeOf(typeof(AppBarData));
+            data.Rectangle = new Rect { Left = monitor.Left, Top = monitor.Top, Right = monitor.Right, Bottom = monitor.Bottom };
+            for (int edge = 0; edge <= 3; edge++)
+            {
+                data.Edge = (uint)edge;
+                if (SHAppBarMessage(11, ref data).ToUInt64() != 0) return edge;
+            }
+            return -1;
         }
         internal static bool IsAutoHiddenTaskbar(IntPtr window, int edge, Rectangle monitor)
         {

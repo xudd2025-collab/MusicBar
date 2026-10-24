@@ -163,12 +163,20 @@ namespace MusicBar
         public int VerticalOffset { get; private set; }
         public int MonitorIndex { get; private set; }
         public string Alignment { get; private set; }
+        public double PositionRatio { get; private set; }
+        public int PositionReferenceLength { get; private set; }
+        public float PositionReferenceScale { get; private set; }
+        public bool HasPositionRatio { get; private set; }
         internal OverlayPositionChangedEventArgs(AppSettings settings)
         {
             HorizontalOffset = settings.HorizontalOffset;
             VerticalOffset = settings.VerticalOffset;
             MonitorIndex = settings.MonitorIndex;
             Alignment = settings.Alignment;
+            PositionRatio = settings.PositionRatio;
+            PositionReferenceLength = settings.PositionReferenceLength;
+            PositionReferenceScale = settings.PositionReferenceScale;
+            HasPositionRatio = settings.HasPositionRatio;
         }
     }
 
@@ -416,6 +424,12 @@ namespace MusicBar
         private TaskbarSnapshot _lastBar;
         private List<Rectangle> _lastOccupied = new List<Rectangle>();
         private OverlayLayout _lastLayout;
+        // Keep the most recent non-fullscreen taskbar geometry separate from _lastBar.
+        // A synthetic fullscreen edge must not become the anchor for the next refresh,
+        // or the lyrics jump away from their usual position.
+        private TaskbarSnapshot _lastNormalBar;
+        private List<Rectangle> _lastNormalOccupied = new List<Rectangle>();
+        private OverlayLayout _lastNormalLayout;
         private bool _dragging;
         private Point _dragCursorStart;
         private Point _dragPreviousCursor;
@@ -498,12 +512,17 @@ namespace MusicBar
             copy.GradientEndColor = settings.GradientEndColor;
             copy.TranslationGradientEndColor = settings.TranslationGradientEndColor;
             copy.AuthorWatermarkDismissed = settings.AuthorWatermarkDismissed;
+            copy.ShowWhenFullscreen = settings.ShowWhenFullscreen;
             copy.KaraokeEnabled = settings.KaraokeEnabled;
             copy.BoldLyrics = settings.BoldLyrics;
             copy.Width = settings.Width;
             copy.HorizontalOffset = settings.HorizontalOffset;
             copy.VerticalOffset = settings.VerticalOffset;
             copy.MonitorIndex = settings.MonitorIndex;
+            copy.PositionRatio = settings.PositionRatio;
+            copy.PositionReferenceLength = settings.PositionReferenceLength;
+            copy.PositionReferenceScale = settings.PositionReferenceScale;
+            copy.HasPositionRatio = settings.HasPositionRatio;
             copy.Alignment = settings.Alignment;
             copy.Normalize();
             OnUi(delegate
@@ -663,27 +682,56 @@ namespace MusicBar
                 return;
             }
             TaskbarSnapshot bar;
+            bool fullscreen = false;
+            bool usingRememberedPlacement = false;
             if (!TaskbarGeometry.TryFind(_settings.MonitorIndex, out bar))
             {
-                HideOverlay("任务栏未显示或尚未找到，歌词已隐藏");
-                return;
+                if (!_settings.ShowWhenFullscreen || !TaskbarGeometry.TryCreateFullscreenSnapshot(_settings.MonitorIndex, Handle, _lastNormalBar, _settings, out bar))
+                {
+                    HideOverlay("任务栏未显示或尚未找到，歌词已隐藏");
+                    return;
+                }
+                fullscreen = true;
+                TaskbarSnapshot remembered;
+                if (TryGetRememberedNormalBar(bar.MonitorBounds, out remembered))
+                {
+                    bar = remembered;
+                    usingRememberedPlacement = true;
+                }
+            }
+            else if (TaskbarGeometry.ForegroundIsFullscreen(bar.MonitorBounds, Handle))
+            {
+                fullscreen = true;
+                if (!_settings.ShowWhenFullscreen)
+                {
+                    HideOverlay("当前显示器正在全屏，歌词已隐藏");
+                    return;
+                }
+                TaskbarSnapshot remembered;
+                if (TryGetRememberedNormalBar(bar.MonitorBounds, out remembered))
+                {
+                    bar = remembered;
+                    usingRememberedPlacement = true;
+                }
             }
             _layoutTimer.Interval = bar.AutoHide ? 100 : 250;
             // Hover is the reliable reveal signal with an auto-hidden bar. Hiding as soon as the
             // pointer leaves prevents a separate topmost window remaining during its collapse.
-            if (bar.AutoHide && !OverlayNative.CursorIn(bar.Bounds))
+            if (!fullscreen && bar.AutoHide && !OverlayNative.CursorIn(bar.Bounds))
             {
                 HideOverlay("任务栏自动隐藏：鼠标移到任务栏后显示歌词");
                 return;
             }
-            if (TaskbarGeometry.ForegroundIsFullscreen(bar.MonitorBounds, Handle))
-            {
-                HideOverlay("当前显示器正在全屏，歌词已隐藏");
-                return;
-            }
 
-            List<Rectangle> occupied = new List<Rectangle>(bar.NativeOccupied);
-            if (_settings.FollowTaskbar)
+            // Reuse the exact taskbar gap found before fullscreen, including native and UIA
+            // occupied areas. Recalculating against an empty synthetic bar changes the meaning
+            // of the saved alignment/offset and can move the lyrics to a different screen spot.
+            List<Rectangle> occupied = usingRememberedPlacement
+                ? new List<Rectangle>(_lastNormalOccupied)
+                : new List<Rectangle>(bar.NativeOccupied);
+            // A full-screen surface has no taskbar buttons to avoid. Skipping the UIA scan
+            // also keeps the overlay visible while Explorer is hidden by the foreground app.
+            if (_settings.FollowTaskbar && !fullscreen)
             {
                 RequestOccupancyScan(bar);
                 OccupancyCache cached;
@@ -716,6 +764,15 @@ namespace MusicBar
                 }
             }
 
+            // Keep a copy of the real taskbar geometry while Explorer is available. When a
+            // fullscreen app hides it, the synthetic edge surface can reuse the same edge,
+            // scale and occupied gaps instead of resetting to a fixed 48px bottom strip.
+            if (!fullscreen && bar.Handle != IntPtr.Zero)
+            {
+                _lastNormalBar = CloneSnapshot(bar);
+                _lastNormalOccupied = new List<Rectangle>(occupied);
+            }
+
             bool nudged = _pendingHorizontalNudge != 0;
             if (nudged)
             {
@@ -723,6 +780,16 @@ namespace MusicBar
                 _pendingHorizontalNudge = 0;
             }
             OverlayLayout layout = TaskbarGeometry.Calculate(bar, GeometrySettings(), occupied);
+            double positionRatio;
+            if (fullscreen && bar.Handle == IntPtr.Zero && !usingRememberedPlacement && TryGetRememberedPositionRatio(bar, out positionRatio))
+                TaskbarGeometry.ApplyPositionRatio(bar, layout, positionRatio);
+            // Keep the exact screen position used while the taskbar was visible. A synthetic
+            // fullscreen edge is only a geometry aid; it must not move a user-positioned lyric
+            // surface to the bottom edge. Re-map only when the monitor rectangle changed.
+            if (fullscreen && _lastNormalBar != null && _lastNormalLayout != null)
+                TaskbarGeometry.ApplyRememberedLocation(_lastNormalBar.MonitorBounds, _lastNormalLayout,
+                    bar.MonitorBounds, layout);
+            if (!fullscreen && bar.Handle != IntPtr.Zero) _lastNormalLayout = CloneLayout(layout);
             ApplyLayout(bar, occupied, layout);
             if (nudged) PublishPosition(false);
         }
@@ -732,6 +799,19 @@ namespace MusicBar
             _lastBar = bar;
             _lastOccupied = new List<Rectangle>(occupied);
             _lastLayout = layout;
+            if (bar.Handle != IntPtr.Zero && !layout.Bounds.IsEmpty)
+            {
+                int referenceLength = bar.Horizontal ? bar.Bounds.Width : bar.Bounds.Height;
+                double ratio = TaskbarGeometry.PositionRatio(bar, layout);
+                bool changed = !_settings.HasPositionRatio || Math.Abs(_settings.PositionRatio - ratio) > .001
+                    || _settings.PositionReferenceLength != referenceLength
+                    || Math.Abs(_settings.PositionReferenceScale - bar.Scale) > .01f;
+                _settings.PositionRatio = ratio;
+                _settings.PositionReferenceLength = referenceLength;
+                _settings.PositionReferenceScale = bar.Scale;
+                _settings.HasPositionRatio = true;
+                if (changed) PublishPosition(false);
+            }
             if (layout.Bounds.Width < 1 || layout.Bounds.Height < 1)
             {
                 HideOverlay("任务栏空位不足，歌词已隐藏；可缩小宽度或选择任务栏上方模式");
@@ -753,6 +833,50 @@ namespace MusicBar
                 PublishPosition(false);
             }
             UpdateAnimationTimer();
+        }
+
+        private static TaskbarSnapshot CloneSnapshot(TaskbarSnapshot source)
+        {
+            if (source == null) return null;
+            TaskbarSnapshot copy = new TaskbarSnapshot
+            {
+                Handle = source.Handle, Bounds = source.Bounds, MonitorBounds = source.MonitorBounds,
+                WorkingArea = source.WorkingArea, Scale = source.Scale, Horizontal = source.Horizontal,
+                Edge = source.Edge, AutoHide = source.AutoHide
+            };
+            copy.NativeOccupied.AddRange(source.NativeOccupied);
+            return copy;
+        }
+
+        private static OverlayLayout CloneLayout(OverlayLayout source)
+        {
+            if (source == null) return null;
+            return new OverlayLayout { Bounds = source.Bounds, Rotate = source.Rotate, RotateClockwise = source.RotateClockwise,
+                Scale = source.Scale, PositionClamped = source.PositionClamped, CrossedButtons = source.CrossedButtons,
+                ResolvedHorizontalOffset = source.ResolvedHorizontalOffset };
+        }
+
+        private bool TryGetRememberedNormalBar(Rectangle monitor, out TaskbarSnapshot snapshot)
+        {
+            snapshot = null;
+            if (_lastNormalBar == null || _lastNormalBar.MonitorBounds.Width <= 0 || _lastNormalBar.MonitorBounds.Height <= 0) return false;
+            // A saved physical rectangle from another monitor/resolution is not safe to reuse.
+            // The logical settings (width/alignment/offset) will be recalculated for the new
+            // monitor instead, while an unchanged monitor keeps the exact taskbar placement.
+            if (_lastNormalBar.MonitorBounds != monitor) return false;
+            snapshot = CloneSnapshot(_lastNormalBar);
+            return snapshot != null;
+        }
+
+        private bool TryGetRememberedPositionRatio(TaskbarSnapshot target, out double ratio)
+        {
+            ratio = _settings.PositionRatio;
+            if (_lastNormalBar != null && _lastNormalLayout != null)
+            {
+                ratio = TaskbarGeometry.PositionRatio(_lastNormalBar, _lastNormalLayout);
+                return true;
+            }
+            return _settings.HasPositionRatio && target != null;
         }
 
         private bool PaintLayout(OverlayLayout layout)
@@ -815,10 +939,13 @@ namespace MusicBar
                 && left.ColorMode == right.ColorMode && left.GradientEndColor == right.GradientEndColor
                 && left.TranslationGradientEndColor == right.TranslationGradientEndColor
                 && left.AuthorWatermarkDismissed == right.AuthorWatermarkDismissed
+                && left.ShowWhenFullscreen == right.ShowWhenFullscreen
                 && left.KaraokeEnabled == right.KaraokeEnabled && left.BoldLyrics == right.BoldLyrics
                 && left.Width == right.Width && left.HorizontalOffset == right.HorizontalOffset
                 && left.MaxCharactersPerLine == right.MaxCharactersPerLine
-                && left.VerticalOffset == right.VerticalOffset && left.MonitorIndex == right.MonitorIndex && left.Alignment == right.Alignment;
+                && left.VerticalOffset == right.VerticalOffset && left.MonitorIndex == right.MonitorIndex && left.Alignment == right.Alignment
+                && left.PositionRatio == right.PositionRatio && left.PositionReferenceLength == right.PositionReferenceLength
+                && left.PositionReferenceScale == right.PositionReferenceScale && left.HasPositionRatio == right.HasPositionRatio;
         }
 
         private void ResetScrolling()

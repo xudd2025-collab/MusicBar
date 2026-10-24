@@ -175,6 +175,8 @@ namespace MusicBar
             Check(turned.Rotate && turned.Bounds.Width == 48 && turned.Bounds.Height == 420, "A vertical taskbar must rotate text within its width.");
             CheckSafe(vertical, turned, verticalControls);
 
+            VerifyFullscreenGeometry();
+
             settings.FollowTaskbar = false;
             settings.VerticalOffset = 2000;
             OverlayLayout floating = TaskbarGeometry.Calculate(bar, settings, controls);
@@ -254,6 +256,86 @@ namespace MusicBar
             Check(state.NextWakeSeconds < .1, "Late-arriving lyrics must shorten their initial hold before the first timer wakeup.");
             for (double tick = .033; tick < .14; tick += .033) state.Advance(tick, .2);
             Check(Math.Abs(state.Offset - 1000) < .01, "A lyric with less than half a second remaining must still reveal its complete tail in time.");
+        }
+
+        private static void VerifyFullscreenGeometry()
+        {
+            AppSettings fullscreenSettings = new AppSettings { AuthorWatermarkDismissed = true, FollowTaskbar = true, Width = 420, FontSize = 16 };
+            TaskbarSnapshot fullHd = TaskbarGeometry.CreateFullscreenSnapshot(
+                new Rectangle(0, 0, 1920, 1080), new Rectangle(0, 0, 1920, 1032), 1f, 3, 0, 40);
+            Check(fullHd.Bounds == new Rectangle(0, 1032, 1920, 48) && fullHd.Horizontal && fullHd.Edge == 3,
+                "Fullscreen placement on 1920x1080 should follow the 48px bottom work-area inset.");
+            OverlayLayout fullHdLayout = TaskbarGeometry.Calculate(fullHd, fullscreenSettings, new List<Rectangle>());
+            Check(fullHd.Bounds.Contains(fullHdLayout.Bounds) && fullHdLayout.Bounds.Bottom == 1080,
+                "Fullscreen lyrics must occupy the same bottom edge as the real taskbar.");
+
+            TaskbarSnapshot quadHd = TaskbarGeometry.CreateFullscreenSnapshot(
+                new Rectangle(0, 0, 2560, 1440), new Rectangle(0, 0, 2560, 1384), 1.5f, 3, 0, 60);
+            Check(quadHd.Bounds == new Rectangle(0, 1384, 2560, 56) && quadHd.Scale == 1.5f,
+                "2560x1440 placement should use its own 56px work-area inset and 150% DPI.");
+            OverlayLayout quadHdLayout = TaskbarGeometry.Calculate(quadHd, fullscreenSettings, new List<Rectangle>());
+            Check(quadHd.Bounds.Contains(quadHdLayout.Bounds) && quadHdLayout.Bounds.Width == 630,
+                "A high-DPI fullscreen layout should scale lyric width while staying on the detected taskbar edge.");
+
+            TaskbarSnapshot portrait = TaskbarGeometry.CreateFullscreenSnapshot(
+                new Rectangle(-1080, 0, 1080, 1920), new Rectangle(-1008, 0, 1008, 1920), 1.25f, 0, 0, 48);
+            Check(portrait.Bounds == new Rectangle(-1080, 0, 72, 1920) && !portrait.Horizontal && portrait.Edge == 0,
+                "A portrait display with a left taskbar should use the left-edge work-area inset.");
+            OverlayLayout portraitLayout = TaskbarGeometry.Calculate(portrait, fullscreenSettings, new List<Rectangle>());
+            Check(portraitLayout.Rotate && portrait.Bounds.Contains(portraitLayout.Bounds),
+                "Portrait fullscreen lyrics should rotate and stay within the left taskbar region.");
+
+            TaskbarSnapshot rightTaskbar = TaskbarGeometry.CreateFullscreenSnapshot(
+                new Rectangle(-1440, 0, 2560, 1440), new Rectangle(-1440, 0, 2488, 1440), 1.5f, 2, 0, 60);
+            Check(rightTaskbar.Bounds == new Rectangle(1048, 0, 72, 1440) && rightTaskbar.Edge == 2,
+                "A right-side taskbar on a secondary monitor should retain its negative-origin monitor coordinates.");
+            OverlayLayout rightTaskbarLayout = TaskbarGeometry.Calculate(rightTaskbar, fullscreenSettings, new List<Rectangle>());
+            Check(rightTaskbarLayout.Rotate && rightTaskbar.Bounds.Contains(rightTaskbarLayout.Bounds),
+                "Lyrics on a right-side taskbar should remain inside that edge at any monitor origin.");
+
+            List<Rectangle> mapped = TaskbarGeometry.MapOccupied(
+                BottomBar(1920, 1080, 48, 1f), quadHd,
+                new List<Rectangle> { new Rectangle(700, 1032, 200, 48) });
+            Check(mapped.Count == 1 && mapped[0] == new Rectangle(933, 1384, 267, 56),
+                "Remembered occupied regions should scale by monitor ratios and clip to the destination taskbar edge.");
+
+            Check(OverlayNative.SelectMonitorScale(1.5f, 1f, false) == 1.5f,
+                "A window left on a 100% DPI screen must not override the selected 150% DPI monitor.");
+            Check(OverlayNative.SelectMonitorScale(1.5f, 1.25f, true) == 1.25f,
+                "The current window DPI should remain authoritative when it is on the target monitor.");
+
+            int autoHideReveal = TaskbarGeometry.ReliableTaskbarThickness(2, 1.5f);
+            Check(autoHideReveal == 0 && TaskbarGeometry.ReliableTaskbarThickness(56, 1.5f) == 56,
+                "A thin auto-hide reveal must not be mistaken for the taskbar thickness, while a real bar remains unchanged.");
+            TaskbarSnapshot autoHideFallback = TaskbarGeometry.CreateFullscreenSnapshot(
+                new Rectangle(0, 0, 3840, 2160), new Rectangle(0, 0, 3840, 2160), 1.5f, 3, autoHideReveal, 58);
+            Check(autoHideFallback.Bounds == new Rectangle(0, 2102, 3840, 58),
+                "When only an auto-hide sliver is visible, fullscreen lyrics should use a scaled fallback surface instead of a 2px strip.");
+
+            OverlayLayout rememberedSource = new OverlayLayout
+            {
+                Bounds = new Rectangle(600, 1032, 420, 48),
+                Scale = 1f
+            };
+            OverlayLayout rememberedSame = new OverlayLayout
+            {
+                Bounds = new Rectangle(0, 1032, 420, 48),
+                Scale = 1f
+            };
+            TaskbarGeometry.ApplyRememberedLocation(new Rectangle(0, 0, 1920, 1080), rememberedSource,
+                new Rectangle(0, 0, 1920, 1080), rememberedSame);
+            Check(rememberedSame.Bounds == rememberedSource.Bounds,
+                "Fullscreen on the same monitor must preserve the exact normal lyric coordinates.");
+
+            OverlayLayout rememberedScaled = new OverlayLayout
+            {
+                Bounds = new Rectangle(0, 1384, 630, 56),
+                Scale = 1.5f
+            };
+            TaskbarGeometry.ApplyRememberedLocation(new Rectangle(0, 0, 1920, 1080), rememberedSource,
+                new Rectangle(0, 0, 2560, 1440), rememberedScaled);
+            Check(rememberedScaled.Bounds == new Rectangle(772, 1384, 630, 56),
+                "Fullscreen on a resized monitor must map the remembered lyric position proportionally.");
         }
 
         private static void VerifyAnimationScheduler()
