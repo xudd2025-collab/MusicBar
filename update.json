@@ -1,15 +1,15 @@
 {
-  "version": "1.0.25",
-  "notes": "- 修复全屏显示歌词时位置跳到视频控制栏的问题：同一显示器保持进入全屏前的原坐标，分辨率或显示器变化时按比例适配。\n- 完善多分辨率、DPI、横竖屏、左右侧任务栏和副屏定位。\n- 安装包改为仅提供简体中文安装界面；检测到 MusicBar 正在运行时，安装程序会先关闭应用再更新，保留用户设置和歌词缓存。",
-  "release_url": "https://github.com/xudd2025-collab/MusicBar/releases/tag/v1.0.25",
+  "version": "1.0.26",
+  "notes": "- 修复安装向导许可协议页面仍显示英文 MIT 正文的问题，改为简体中文译文；原始许可文件继续随程序保留。",
+  "release_url": "https://github.com/xudd2025-collab/MusicBar/releases/tag/v1.0.26",
   "installer": {
-    "name": "MusicBar-Setup-1.0.25.exe",
-    "sha256": "357a3a5efb62de76c3fee36b659df5ab628a3024fca36c3e8ce361214f9081c8",
+    "name": "MusicBar-Setup-1.0.26.exe",
+    "sha256": "451b7669030e21e7d544edd6511916ee3041043f63338fd4bf0864a8116681ca",
     "urls": [
-      "https://github.com/xudd2025-collab/MusicBar/releases/download/v1.0.25/MusicBar-Setup-1.0.25.exe",
-      "https://raw.githubusercontent.com/xudd2025-collab/MusicBar/updates/releases/v1.0.25/MusicBar-Setup-1.0.25.exe",
-      "https://cdn.jsdelivr.net/gh/xudd2025-collab/MusicBar@updates/releases/v1.0.25/MusicBar-Setup-1.0.25.exe",
-      "https://fastly.jsdelivr.net/gh/xudd2025-collab/MusicBar@updates/releases/v1.0.25/MusicBar-Setup-1.0.25.exe"
+      "https://github.com/xudd2025-collab/MusicBar/releases/download/v1.0.26/MusicBar-Setup-1.0.26.exe",
+      "https://raw.githubusercontent.com/xudd2025-collab/MusicBar/updates/releases/v1.0.26/MusicBar-Setup-1.0.26.exe",
+      "https://cdn.jsdelivr.net/gh/xudd2025-collab/MusicBar@updates/releases/v1.0.26/MusicBar-Setup-1.0.26.exe",
+      "https://fastly.jsdelivr.net/gh/xudd2025-collab/MusicBar@updates/releases/v1.0.26/MusicBar-Setup-1.0.26.exe"
     ]
   }
 }
