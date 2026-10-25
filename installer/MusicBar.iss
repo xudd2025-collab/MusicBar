@@ -1,5 +1,5 @@
 #ifndef AppVersion
-  #define AppVersion "1.0.25"
+  #define AppVersion "1.0.26"
 #endif
 #ifndef SourceDir
   #define SourceDir "..\dist\stage\MusicBar"
@@ -24,7 +24,7 @@ OutputBaseFilename=MusicBar-Setup-{#AppVersion}
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
-LicenseFile={#SourceDir}\LICENSE
+LicenseFile={#SourceDir}\LICENSE.zh-CN.txt
 SetupIconFile={#SourceDir}\MusicBar.ico
 UninstallDisplayIcon={app}\MusicBar.exe
 CloseApplications=yes
@@ -45,6 +45,7 @@ Source: "{#SourceDir}\MusicBar.exe.config"; DestDir: "{app}"; Flags: ignoreversi
 Source: "{#SourceDir}\MusicBar.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceDir}\update-source.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceDir}\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#SourceDir}\LICENSE.zh-CN.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceDir}\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceDir}\Microsoft.Web.WebView2.Core.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceDir}\Microsoft.Web.WebView2.WinForms.dll"; DestDir: "{app}"; Flags: ignoreversion

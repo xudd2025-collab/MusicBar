@@ -18,7 +18,7 @@ MusicBar 是一款免费开源的 Windows 音乐歌词工具，提供中文设�
 
 ## 安装
 
-从 Releases 下载 `MusicBar-Setup-1.0.25.exe`，按中文安装向导安装。安装时如果 MusicBar 正在运行，安装程序会先关闭它，再更新程序文件；用户设置和歌词缓存会保留。默认安装到当前用户目录，无需管理员权限。也可下载 `MusicBar-Portable-1.0.25.zip`，解压到可写目录后运行 `MusicBar.exe`。
+从 Releases 下载 `MusicBar-Setup-1.0.26.exe`，按中文安装向导安装。安装时如果 MusicBar 正在运行，安装程序会先关闭它，再更新程序文件；用户设置和歌词缓存会保留。默认安装到当前用户目录，无需管理员权限。也可下载 `MusicBar-Portable-1.0.26.zip`，解压到可写目录后运行 `MusicBar.exe`。
 
 需要 Windows 10 1809 及以上 / Windows 11、.NET Framework 4.8。构建和实机验证环境为 Windows x64。
 
