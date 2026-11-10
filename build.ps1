@@ -30,7 +30,7 @@ if (-not (Test-Path -LiteralPath $iconPath)) { throw '缺少 assets\MusicBar.ico
 $arguments = @('/nologo','/target:winexe','/platform:anycpu','/optimize+','/utf8output',('/out:' + (Join-Path $outputPath 'MusicBar.exe')),('/win32manifest:' + (Join-Path $projectDirectory 'app.manifest')),('/win32icon:' + $iconPath),('/resource:' + $iconPath + ',MusicBar.AppIcon.ico'))
 foreach ($reference in $references) { $arguments += '/r:' + $reference }
 foreach ($library in $webViewAssemblies) { $arguments += '/r:' + (Join-Path $webViewSdkDirectory ('lib\net462\' + $library)) }
-$sourceFiles = @('AppHotkey.cs','AppUpdateService.cs','AssemblyInfo.cs','AuthorProjectDialog.cs','ColorPaletteDialog.cs','LyricPalettes.cs','LrcParser.cs','LyricController.cs','LyricOverlay.cs','LyricRepository.cs','QQWordLyricDecoder.cs','MainForm.cs','Models.cs','MusicSessionReader.cs','NetEaseBridgeReader.cs','NetEaseLaunchIntegration.cs','Program.cs','SettingsStore.cs','StartupRegistration.cs','TaskbarGeometry.cs','Theme.cs')
+$sourceFiles = @('AppHotkey.cs','AppUpdateService.cs','AssemblyInfo.cs','AuthorProjectDialog.cs','ColorPaletteDialog.cs','DiagnosticsLog.cs','LyricPalettes.cs','LrcParser.cs','LyricController.cs','LyricOverlay.cs','LyricRepository.cs','QQWordLyricDecoder.cs','MainForm.cs','Models.cs','MusicSessionReader.cs','NetEaseBridgeReader.cs','NetEaseLaunchIntegration.cs','Program.cs','SettingsStore.cs','StartupRegistration.cs','TaskbarGeometry.cs','Theme.cs')
 $sourcePaths = $sourceFiles | ForEach-Object { Join-Path $projectDirectory $_ }
 $arguments += $sourcePaths
 & $compilerPath @arguments
@@ -50,7 +50,7 @@ if (Test-Path -LiteralPath (Join-Path $projectDirectory 'update-source.json')) {
 if ($Check) {
     $checkOutputPath = [System.IO.Path]::GetFullPath((Join-Path $projectDirectory 'checks\.build'))
     New-Item -ItemType Directory -Path $checkOutputPath -Force | Out-Null
-    $lyricCheckSources = @('Models.cs','SettingsStore.cs','LrcParser.cs','LyricRepository.cs','QQWordLyricDecoder.cs','LyricController.cs','MusicSessionReader.cs','NetEaseBridgeReader.cs')
+    $lyricCheckSources = @('Models.cs','SettingsStore.cs','DiagnosticsLog.cs','LrcParser.cs','LyricRepository.cs','QQWordLyricDecoder.cs','LyricController.cs','MusicSessionReader.cs','NetEaseBridgeReader.cs')
     $checkArguments = @('/nologo','/target:exe','/platform:anycpu','/utf8output',('/out:' + (Join-Path $checkOutputPath 'MusicBar.Checks.exe')),('/main:MusicBar.Checks'))
     foreach ($reference in $references) { $checkArguments += '/r:' + $reference }
     foreach ($source in ($lyricCheckSources + @('StartupRegistration.cs'))) { $checkArguments += Join-Path $projectDirectory $source }

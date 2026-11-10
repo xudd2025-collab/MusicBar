@@ -19,6 +19,7 @@ namespace MusicBar
         {
             try
             {
+                DiagnosticsLogChecks();
                 PersistentCacheChecks().GetAwaiter().GetResult();
                 AutomaticRetryChecks().GetAwaiter().GetResult();
                 PlatformIsolationChecks().GetAwaiter().GetResult();
@@ -326,6 +327,76 @@ namespace MusicBar
             passed++;
         }
 
+        private static void DiagnosticsLogChecks()
+        {
+            string root = Path.Combine(Path.GetTempPath(), "MusicBarDiagnosticsChecks", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(root);
+            try
+            {
+                DateTime logDate = new DateTime(2026, 11, 10, 23, 59, 58, DateTimeKind.Local);
+                string dataDirectory = Path.Combine(root, "data");
+                using (var log = new DiagnosticsLog(dataDirectory, () => logDate, 300, 512))
+                {
+                    var writers = new System.Threading.Tasks.Task[4];
+                    for (int worker = 0; worker < writers.Length; worker++)
+                    {
+                        int workerId = worker;
+                        writers[worker] = System.Threading.Tasks.Task.Run(() =>
+                        {
+                            for (int entry = 0; entry < 40; entry++)
+                                log.Add("并发测试", "worker=" + workerId + " entry=" + entry + " detail=" + new string('x', 40));
+                        });
+                    }
+                    System.Threading.Tasks.Task.WaitAll(writers);
+                    log.Add("QQ歌词请求失败", "只记录简短元数据; authorization: Bearer PRIVATEVALUE");
+                    Check(log.Flush(TimeSpan.FromSeconds(10)), "diagnostic logger flushes records asynchronously");
+                    logDate = logDate.AddDays(1);
+                    log.Add("重试", "次日事件");
+                    Check(log.Flush(TimeSpan.FromSeconds(10)), "diagnostic logger handles a local date boundary");
+                    Check(log.Stop(TimeSpan.FromSeconds(10)), "diagnostic logger shuts down after flushing pending records");
+                    Check(log.DroppedCount == 0 && !log.HadWriteFailure, "diagnostic queue accepts concurrent records without logging failures");
+                }
+
+                string logs = Path.Combine(dataDirectory, "logs");
+                string secondDay = Path.Combine(logs, "MusicBar-2026-11-11.log");
+                string[] firstDayFiles = Directory.GetFiles(logs, "MusicBar-2026-11-10*.log");
+                Check(firstDayFiles.Length > 1, "daily diagnostic files split into bounded-size segments");
+                Check(File.Exists(secondDay), "diagnostic records are separated by local calendar day");
+                int entries = 0;
+                var content = new StringBuilder();
+                foreach (string file in firstDayFiles)
+                {
+                    Check(new FileInfo(file).Length <= 300, "diagnostic segment respects the configured byte limit");
+                    string text = File.ReadAllText(file, Encoding.UTF8);
+                    content.Append(text);
+                    entries += text.Split(new[] { Environment.NewLine }, StringSplitOptions.RemoveEmptyEntries).Length;
+                }
+                Check(entries == 161, "concurrent diagnostic events and the failure event are all persisted");
+                Check(content.ToString().Contains("authorization=[已隐藏]") && !content.ToString().Contains("PRIVATEVALUE"), "common credential fields are redacted before disk writes");
+                Check(content.ToString().Contains("QQ歌词请求失败"), "diagnostic events retain a concise Chinese event summary");
+
+                string blockedData = Path.Combine(root, "not-a-directory");
+                File.WriteAllText(blockedData, "file blocks log directory creation");
+                using (var failed = new DiagnosticsLog(blockedData, () => logDate, 300, 2))
+                {
+                    failed.Add("磁盘不可写时也不影响主程序", "记录失败不应抛异常");
+                    Check(!failed.Flush(TimeSpan.FromSeconds(5)) && failed.HadWriteFailure, "unwritable log path is reported without throwing to the application");
+                    failed.Stop(TimeSpan.FromSeconds(5));
+                }
+                DiagnosticsLog.Initialize(Path.Combine(root, "shared-data"));
+                Check(DiagnosticsLog.Write("启动", "静态入口可用") && DiagnosticsLog.Shutdown(TimeSpan.FromSeconds(5)), "static initialize/write/shutdown facade persists entries with a bounded flush");
+                Check(Directory.GetFiles(Path.Combine(root, "shared-data", "logs"), "MusicBar-????-??-??.log").Length == 1, "application logger uses the MusicBar daily filename under data/logs");
+            }
+            finally
+            {
+                string target = Path.GetFullPath(root);
+                string allowed = Path.GetFullPath(Path.GetTempPath()).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+                if (!target.StartsWith(allowed, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Invalid diagnostics test cleanup path.");
+                if (Directory.Exists(target)) Directory.Delete(target, true);
+            }
+        }
+
         private static void DisplayAnnotationChecks()
         {
             const string displayed = "なんでもないや (没什么大不了) (Movie ver.)";
@@ -379,6 +450,32 @@ namespace MusicBar
             Check(LyricRepository.SelectAutomaticMatch(myAll, new[] { catalog }) == null, "an album alias cannot hide a deluxe recording qualifier");
             catalog.Album = "GUILTY (Movie ver.)";
             Check(LyricRepository.SelectAutomaticMatch(myAll, new[] { catalog }) == null, "an album alias cannot hide a movie version qualifier");
+
+            var noAlbum = new MusicSnapshot { Player = MusicPlayer.QQMusic, Title = "青丝 (DJ版)", Artist = "邓寓君(等什么君)", DurationSeconds = 215.099 };
+            var exactNoAlbum = new LyricSearchResult { Player = MusicPlayer.QQMusic, Id = "no-album-exact", Title = "青丝 (DJ版)",
+                Artist = "邓寓君(等什么君) / 赵允哲", DurationSeconds = 215 };
+            Check(LyricRepository.SelectQQMatchWithoutAlbum(noAlbum, new[] { exactNoAlbum }) == exactNoAlbum,
+                "missing album metadata accepts one exact QQ recording with matching lead artist and duration");
+            var closeNoAlbum = new LyricSearchResult { Player = MusicPlayer.QQMusic, Id = "no-album-close", Title = exactNoAlbum.Title,
+                Artist = exactNoAlbum.Artist, DurationSeconds = 213.5 };
+            Check(LyricRepository.SelectQQMatchWithoutAlbum(noAlbum, new[] { exactNoAlbum, closeNoAlbum }) == null,
+                "missing album metadata rejects ambiguous duration-near recordings instead of selecting the closest");
+            var wrongVersionNoAlbum = new LyricSearchResult { Player = MusicPlayer.QQMusic, Id = "no-album-version", Title = "青丝 (0.8XDJ版)",
+                Artist = noAlbum.Artist, DurationSeconds = 215 };
+            Check(LyricRepository.SelectQQMatchWithoutAlbum(noAlbum, new[] { wrongVersionNoAlbum }) == null,
+                "missing album metadata never substitutes a different version title");
+            var wrongArtistNoAlbum = new LyricSearchResult { Player = MusicPlayer.QQMusic, Id = "no-album-artist", Title = noAlbum.Title,
+                Artist = "Different artist", DurationSeconds = 215 };
+            Check(LyricRepository.SelectQQMatchWithoutAlbum(noAlbum, new[] { wrongArtistNoAlbum }) == null,
+                "missing album metadata still requires matching artist identity");
+            var wrongDurationNoAlbum = new LyricSearchResult { Player = MusicPlayer.QQMusic, Id = "no-album-duration", Title = noAlbum.Title,
+                Artist = noAlbum.Artist, DurationSeconds = 220 };
+            Check(LyricRepository.SelectQQMatchWithoutAlbum(noAlbum, new[] { wrongDurationNoAlbum }) == null,
+                "missing album metadata still requires a matching recording duration");
+            var duplicateNoAlbum = new LyricSearchResult { Player = exactNoAlbum.Player, Id = exactNoAlbum.Id, Title = exactNoAlbum.Title,
+                Artist = exactNoAlbum.Artist, DurationSeconds = exactNoAlbum.DurationSeconds };
+            Check(LyricRepository.SelectQQMatchWithoutAlbum(noAlbum, new[] { exactNoAlbum, duplicateNoAlbum }) == exactNoAlbum,
+                "duplicate catalog details for one recording do not create false ambiguity");
         }
 
         private enum RetryReply { NoMatch, ServiceFailure, EmptyLyrics, PlainLyrics, TimedLyrics }

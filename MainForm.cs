@@ -429,17 +429,19 @@ namespace MusicBar
         }
         private Panel BuildPaletteLibrary()
         {
-            var card = Theme.Card(); card.Height = 214; card.Margin = new Padding(0, 0, 0, 14);
+            int rows = (LyricPalette.All.Length + 3) / 4;
+            int tileHeight = rows * 63;
+            var card = Theme.Card(); card.Height = 88 + tileHeight; card.Margin = new Padding(0, 0, 0, 14);
             var title = Theme.Label("配色库", 12, Theme.Text); title.Font = Theme.Font(12, FontStyle.Bold); title.SetBounds(18, 12, 190, 26); card.Controls.Add(title);
-            var hint = Theme.Label("8 套搭配 · 点击应用，原文与译文一起换色", 8, Theme.Muted); hint.SetBounds(18, 42, 475, 22); card.Controls.Add(hint);
+            var hint = Theme.Label(LyricPalette.All.Length + " 套搭配 · 点击应用，原文与译文一起换色", 8, Theme.Muted); hint.SetBounds(18, 42, 475, 22); card.Controls.Add(hint);
             solidPaletteButton = Theme.Button("纯色", false); solidPaletteButton.SetBounds(540, 17, 88, 34); solidPaletteButton.Anchor = AnchorStyles.Top | AnchorStyles.Right; solidPaletteButton.AccessibleName = "使用纯色歌词";
             gradientPaletteButton = Theme.Button("渐变", false); gradientPaletteButton.SetBounds(636, 17, 88, 34); gradientPaletteButton.Anchor = AnchorStyles.Top | AnchorStyles.Right; gradientPaletteButton.AccessibleName = "使用渐变歌词";
             solidPaletteButton.Click += delegate { controller.Settings.ColorMode = "solid"; Apply(false); };
             gradientPaletteButton.Click += delegate { controller.Settings.ColorMode = "gradient"; Apply(false); };
             card.Controls.Add(solidPaletteButton); card.Controls.Add(gradientPaletteButton);
-            var tiles = new TableLayoutPanel { Bounds = new Rectangle(14, 74, 714, 126), ColumnCount = 4, RowCount = 2, BackColor = Theme.Surface, Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right };
+            var tiles = new TableLayoutPanel { Bounds = new Rectangle(14, 74, 714, tileHeight), ColumnCount = 4, RowCount = rows, BackColor = Theme.Surface, Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right };
             for (int i = 0; i < 4; i++) tiles.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
-            for (int i = 0; i < 2; i++) tiles.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
+            for (int i = 0; i < rows; i++) tiles.RowStyles.Add(new RowStyle(SizeType.Absolute, 63));
             for (int i = 0; i < LyricPalette.All.Length; i++)
             {
                 var choice = LyricPalette.All[i];
@@ -880,17 +882,19 @@ namespace MusicBar
             var request = new CancellationTokenSource(); searchRequest = request;
             lyricStatusRequest = request;
             MusicPlayer player = lyricSource.SelectedIndex == 0 ? MusicPlayer.QQMusic : MusicPlayer.NetEase;
+            DiagnosticsLog.Write("手动搜索", "播放器=" + MusicSnapshot.PlayerName(player) + " 当前歌曲=" + controller.Snapshot.Title + " 查询字符数=" + text.Length);
             resultsTrackKey = controller.Snapshot.TrackKey;
             results.Items.Clear(); fetchButton.Enabled = false; searchButton.Enabled = false; lyricStatus.Text = "正在搜索歌词…";
             try
             {
                 var songs = await controller.Repository.SearchAsync(player, text, request.Token);
+                DiagnosticsLog.Write("手动搜索完成", "播放器=" + MusicSnapshot.PlayerName(player) + " 当前歌曲=" + controller.Snapshot.Title + " 候选数=" + songs.Count);
                 if (IsDisposed || request.IsCancellationRequested || !controller.Settings.OnlineLyrics) return;
                 foreach (var song in songs) results.Items.Add(song);
                 lyricStatus.Text = songs.Count == 0 ? "没有找到结果，可换用另一歌词来源，或导入 LRC。" : "找到 " + songs.Count + " 个结果，请选择对应版本。";
             }
             catch (OperationCanceledException) { }
-            catch (Exception ex) { if (!IsDisposed && !request.IsCancellationRequested) lyricStatus.Text = "搜索失败，可导入本地 LRC。" + Environment.NewLine + ex.Message; }
+            catch (Exception ex) { DiagnosticsLog.Write("手动搜索失败", ex.Message); if (!IsDisposed && !request.IsCancellationRequested) lyricStatus.Text = "搜索失败，可导入本地 LRC。" + Environment.NewLine + ex.Message; }
             finally
             {
                 if (lyricStatusRequest == request) lyricStatusRequest = null;
@@ -903,6 +907,8 @@ namespace MusicBar
             if (song == null || !fetchButton.Enabled) return;
             if (!controller.Settings.OnlineLyrics) { lyricStatus.Text = "在线获取已关闭，可导入本地 LRC。"; return; }
             if (controller.Snapshot.TrackKey != resultsTrackKey) { lyricStatus.Text = "播放器已经切歌，请按当前歌曲重新搜索，避免绑定错误的歌词。"; return; }
+            DiagnosticsLog.Write("手动选择歌词", "当前歌曲=" + controller.Snapshot.Title + " 选择版本=" + song.Title + " 歌手=" + song.Artist + " 专辑=" + song.Album +
+                " 歌词平台=" + MusicSnapshot.PlayerName(song.Player));
             string before = controller.Snapshot.TrackKey;
             if (searchRequest != null) { searchRequest.Cancel(); searchRequest.Dispose(); }
             var request = new CancellationTokenSource(); searchRequest = request;
@@ -911,6 +917,8 @@ namespace MusicBar
             try
             {
                 var doc = await controller.Repository.FetchAsync(song, request.Token);
+                DiagnosticsLog.Write("手动歌词获取完成", "当前歌曲=" + controller.Snapshot.Title + " 有时间轴=" + (doc != null && doc.HasTimedLyrics) +
+                    " 有译文=" + (doc != null && doc.HasTranslation) + " 来源=" + (doc == null ? "无" : doc.Source));
                 if (IsDisposed || request.IsCancellationRequested || !controller.Settings.OnlineLyrics) return;
                 if (controller.Snapshot.TrackKey != before) { lyricStatus.Text = "获取过程中播放器已切歌，请重新选择歌词。"; return; }
                 if (doc == null || !doc.HasTimedLyrics && string.IsNullOrWhiteSpace(doc.PlainText)) { lyricStatus.Text = "该歌曲暂时没有可用歌词，可导入 LRC。"; return; }
@@ -918,7 +926,7 @@ namespace MusicBar
                 lyricStatus.Text = controller.Message;
             }
             catch (OperationCanceledException) { }
-            catch (Exception ex) { if (!IsDisposed && !request.IsCancellationRequested) lyricStatus.Text = "获取歌词失败：" + ex.Message; }
+            catch (Exception ex) { DiagnosticsLog.Write("手动歌词获取失败", ex.Message); if (!IsDisposed && !request.IsCancellationRequested) lyricStatus.Text = "获取歌词失败：" + ex.Message; }
             finally
             {
                 if (lyricStatusRequest == request) lyricStatusRequest = null;

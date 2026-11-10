@@ -34,6 +34,8 @@ namespace MusicBar
                     using (var openSettings = new EventWaitHandle(false, EventResetMode.AutoReset, "Local\\MusicBarOpenSettings"))
                     {
                         var store = new SettingsStore(AppDomain.CurrentDomain.BaseDirectory);
+                        DiagnosticsLog.Initialize(store.DataDirectory);
+                        DiagnosticsLog.Write("启动", "MusicBar " + Application.ProductVersion + " 启动；诊断日志按日期保存在 data\\logs。");
                         using (var controller = new LyricController(store.Load(), store))
                         using (var overlay = new LyricOverlay())
                         using (var form = new MainForm(controller, overlay, automatic))
@@ -52,7 +54,12 @@ namespace MusicBar
                                 }, null, Timeout.Infinite, false);
                             };
                             try { Application.Run(form); }
-                            finally { if (registration != null) registration.Unregister(null); }
+                            finally
+                            {
+                                if (registration != null) registration.Unregister(null);
+                                DiagnosticsLog.Write("退出", "MusicBar 正常关闭。");
+                                DiagnosticsLog.Shutdown();
+                            }
                         }
                     }
                     mutex.ReleaseMutex();
@@ -62,6 +69,8 @@ namespace MusicBar
             {
                 string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "startup-error.txt");
                 try { File.WriteAllText(path, ex.ToString()); } catch { }
+                DiagnosticsLog.Write("启动失败", ex.ToString());
+                DiagnosticsLog.Shutdown();
                 MessageBox.Show("启动失败：" + ex.Message + Environment.NewLine + "请检查 Windows 10 1809 / Windows 11 和 .NET Framework 4.8。", "MusicBar", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
         }

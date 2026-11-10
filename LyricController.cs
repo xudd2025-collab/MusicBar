@@ -60,6 +60,8 @@ namespace MusicBar
         private double lookupDuration;
         private double pendingDuration;
         private DateTime pendingDurationSinceUtc;
+        private string lastLoggedPlaybackState = "";
+        private DateTime lastPlaybackProgressLogUtc = DateTime.MinValue;
 
         public LyricController(AppSettings settings, SettingsStore store)
             : this(settings, store, new LyricRepository(store.DataDirectory)) { }
@@ -80,12 +82,16 @@ namespace MusicBar
                 {
                     polling = true;
                     try { await PollAsync(); }
-                    catch (Exception ex) { Message = "读取播放器失败：" + ex.Message; Notify(); }
+                    catch (Exception ex) { Message = "读取播放器失败：" + ex.Message; DiagnosticsLog.Write("播放器读取失败", ex.Message); Notify(); }
                     finally { polling = false; nextPoll = DateTime.UtcNow.AddMilliseconds(Snapshot.Player == MusicPlayer.NetEase ? 100 : 250); }
                 }
             };
         }
-        public void Start() { ticker.Start(); }
+        public void Start()
+        {
+            DiagnosticsLog.Write("控制器", "开始读取播放器状态。");
+            ticker.Start();
+        }
         public void Notify() { if (!disposed && Changed != null) Changed(this, EventArgs.Empty); }
         public void SettingsChanged(bool reloadLyrics)
         {
@@ -122,11 +128,16 @@ namespace MusicBar
             if (latest != null && (latest.Player == MusicPlayer.QQMusic && !Settings.QQEnabled || latest.Player == MusicPlayer.NetEase && !Settings.NetEaseEnabled))
                 latest = new MusicSnapshot { Status = "当前播放器插件已关闭，等待已启用的播放器。" };
             Snapshot = latest ?? new MusicSnapshot();
+            LogPlaybackSnapshot(Snapshot, utcNow);
             if (Snapshot.HasTrack)
             {
                 if (trackKey != Snapshot.PlaybackKey)
                 {
                     trackKey = Snapshot.PlaybackKey;
+                    DiagnosticsLog.Write("切歌", "播放器=" + MusicSnapshot.PlayerName(Snapshot.Player) +
+                        " 歌名=" + Snapshot.Title + " 歌手=" + Snapshot.Artist + " 专辑=" + Snapshot.Album +
+                        " 时长秒=" + Snapshot.DurationSeconds.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture) +
+                        " 播放中=" + Snapshot.IsPlaying);
                     ManualMode = false;
                     ManualPlaying = false;
                     Document = null;
@@ -149,6 +160,7 @@ namespace MusicBar
                 }
                 else if (NeedsAutomaticLyrics && !Searching && !ManualMode && Settings.OnlineLyrics && Snapshot.IsPlaying && utcNow >= nextLyricRetryUtc)
                 {
+                    DiagnosticsLog.Write("自动重试", "播放器=" + MusicSnapshot.PlayerName(Snapshot.Player) + " 歌名=" + Snapshot.Title + " 歌手=" + Snapshot.Artist);
                     BeginLoad();
                 }
             }
@@ -166,6 +178,28 @@ namespace MusicBar
             else if (!ManualMode && !Searching) Message = Snapshot.Status;
             UpdateLine();
             Notify();
+        }
+        private void LogPlaybackSnapshot(MusicSnapshot snapshot, DateTime utcNow)
+        {
+            if (snapshot == null) return;
+            string state = snapshot.Player + "|" + snapshot.PlaybackKey + "|" + snapshot.Status + "|" + snapshot.IsPlaying + "|" + snapshot.HasTimeline;
+            string details = "播放器=" + MusicSnapshot.PlayerName(snapshot.Player) + " 状态=" + snapshot.Status + " 播放中=" + snapshot.IsPlaying +
+                " 歌名=" + snapshot.Title + " 歌手=" + snapshot.Artist + " 专辑=" + snapshot.Album +
+                " 时长秒=" + snapshot.DurationSeconds.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture) +
+                " 进度秒=" + snapshot.CurrentPosition.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture) +
+                " 有时间轴=" + snapshot.HasTimeline;
+            if (!string.Equals(state, lastLoggedPlaybackState, StringComparison.Ordinal))
+            {
+                lastLoggedPlaybackState = state;
+                lastPlaybackProgressLogUtc = utcNow;
+                DiagnosticsLog.Write("播放器状态", details);
+            }
+            else if (snapshot.HasTrack && snapshot.IsPlaying &&
+                (lastPlaybackProgressLogUtc == DateTime.MinValue || utcNow >= lastPlaybackProgressLogUtc.AddSeconds(15)))
+            {
+                lastPlaybackProgressLogUtc = utcNow;
+                DiagnosticsLog.Write("播放进度", details);
+            }
         }
         private void CancelRequest()
         {
@@ -197,6 +231,7 @@ namespace MusicBar
             var saved = Store.LoadOverride(Snapshot.TrackKey);
             if (saved != null)
             {
+                DiagnosticsLog.Write("本地歌词", "使用手动绑定 歌名=" + requestedTrack.Title + " 歌手=" + requestedTrack.Artist);
                 LrcParser.EnsureTranslation(saved);
                 Document = saved;
                 automaticDocument = false;
@@ -209,12 +244,13 @@ namespace MusicBar
                 LyricDocument cached = Repository.FindCached(requestedTrack);
                 if (cached != null)
                 {
+                    DiagnosticsLog.Write("歌词缓存", "在线获取已关闭，使用本地缓存 歌名=" + requestedTrack.Title + " 来源=" + cached.Source);
                     LrcParser.EnsureTranslation(cached);
                     Document = cached; automaticDocument = true;
                     documentPlaybackKey = requestedTrack.PlaybackKey;
                     Message = "使用本地缓存歌词 · " + cached.Source;
                 }
-                else Message = "在线获取已关闭；本地暂无这首歌的缓存，可导入 LRC。";
+                else { Message = "在线获取已关闭；本地暂无这首歌的缓存，可导入 LRC。"; DiagnosticsLog.Write("歌词缓存", "在线获取已关闭且无缓存 歌名=" + requestedTrack.Title); }
                 UpdateLine(); Notify(); return;
             }
             if (NeedsNetEaseIntegration && !MusicSnapshot.ValidNetEaseTrackId(Snapshot.PlatformTrackId))
@@ -227,6 +263,8 @@ namespace MusicBar
             lyricRequest = request;
             Searching = true;
             Message = "正在匹配歌词…";
+            DiagnosticsLog.Write("歌词查找开始", "播放器=" + MusicSnapshot.PlayerName(requestedTrack.Player) + " 歌名=" + requestedTrack.Title +
+                " 歌手=" + requestedTrack.Artist + " 专辑=" + requestedTrack.Album + " 时长秒=" + requestedTrack.DurationSeconds.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture));
             Notify();
             try
             {
@@ -237,11 +275,15 @@ namespace MusicBar
                     (document == null || !document.HasTimedLyrics);
                 if (!keepExisting) { Document = document; documentPlaybackKey = requestedTrack.PlaybackKey; automaticDocument = true; }
                 Message = keepExisting ? "继续使用已连接的歌词 · " + Document.Source : document == null ? "未找到可靠匹配，请搜索选择歌词或导入 LRC。" : document.HasTimedLyrics ? "歌词已连接 · " + document.Source : string.IsNullOrWhiteSpace(document.PlainText) ? document.Source + "，可导入本地 LRC。" : "这首歌没有逐行时间标记，可导入带时间轴的 LRC。";
+                DiagnosticsLog.Write("歌词查找完成", "歌名=" + requestedTrack.Title + " 找到=" + (document != null) + " 有时间轴=" + (document != null && document.HasTimedLyrics) +
+                    " 有译文=" + (document != null && document.HasTranslation) + " 保留旧歌词=" + keepExisting + " 来源=" + (document == null ? "无" : document.Source));
                 consecutiveFailures = 0;
                 if (NeedsAutomaticLyrics)
                 {
                     inconclusiveAttempts = Math.Min(3, inconclusiveAttempts + 1);
                     int delay = ScheduleRetry(false);
+                    DiagnosticsLog.Write("没有可靠歌词", "歌名=" + requestedTrack.Title + " 歌手=" + requestedTrack.Artist + " 连续未匹配=" + inconclusiveAttempts +
+                        " 下次重试秒=" + delay);
                     Message += Environment.NewLine + "约 " + delay + " 秒后在播放时自动重试。";
                 }
                 else inconclusiveAttempts = 0;
@@ -270,6 +312,8 @@ namespace MusicBar
         {
             consecutiveFailures = Math.Min(5, consecutiveFailures + 1);
             int delay = ScheduleRetry(true);
+            DiagnosticsLog.Write("歌词接口失败", "歌名=" + Snapshot.Title + " 歌手=" + Snapshot.Artist + " 连续失败=" + consecutiveFailures +
+                " 错误=" + detail + " 下次重试秒=" + delay);
             Message = (Document != null && Document.HasTimedLyrics ? "刷新暂未完成，继续显示已连接的歌词。" : "在线歌词接口暂时不可用，将在播放时自动重试；也可搜索或导入 LRC。") + Environment.NewLine + detail;
             if (NeedsAutomaticLyrics) Message += Environment.NewLine + "约 " + delay + " 秒后在播放时自动重试。";
         }
@@ -279,6 +323,7 @@ namespace MusicBar
             // Keep the connected same-song document visible while refreshing.
             // Repeated clicks must not restart an in-flight request indefinitely.
             if (Searching) return;
+            DiagnosticsLog.Write("手动刷新", "重新查找歌曲= " + Snapshot.Title + " 播放器=" + MusicSnapshot.PlayerName(Snapshot.Player));
             if (documentPlaybackKey != Snapshot.PlaybackKey)
             {
                 Document = null;
@@ -292,6 +337,7 @@ namespace MusicBar
             CancelRequest();
             nextLyricRetryUtc = DateTime.MaxValue;
             var result = Repository.ClearCache();
+            DiagnosticsLog.Write("清理歌词缓存", "删除文件=" + result.DeletedFiles + " 失败文件=" + result.FailedFiles);
             Message = result.FailedFiles == 0 ? "歌词缓存已清空；当前显示的歌词继续保留。" :
                 "已清理可删除的歌词缓存，另有 " + result.FailedFiles + " 个文件暂时无法删除。";
             if (Snapshot.HasTrack && !ManualMode && Settings.OnlineLyrics && NeedsAutomaticLyrics)
@@ -315,6 +361,7 @@ namespace MusicBar
             }
             else delay = inconclusiveAttempts <= 1 ? 8 : inconclusiveAttempts == 2 ? 24 : 60;
             nextLyricRetryUtc = DateTime.UtcNow.AddSeconds(delay);
+            DiagnosticsLog.Write("重试计划", "歌曲=" + Snapshot.Title + " 接口失败=" + serviceFailure + " 重试间隔秒=" + delay);
             return delay;
         }
         public void RestoreAutomatic()

@@ -35,7 +35,31 @@ namespace MusicBar
             new LyricPalette("玫瑰奶油", "#EADAE0", "#FFACCA", "#FFE2A8", "#CEB6C1", "#FFD0E1", "#FFF0CD"),
             new LyricPalette("海盐青柠", "#DCE5D4", "#D0F584", "#74E1CB", "#B9C7AE", "#E2F9B5", "#B0F0E0"),
             new LyricPalette("琥珀流光", "#E8DECD", "#FFD879", "#FFA56E", "#C7BCA5", "#FFE8AD", "#FFD0AF"),
-            new LyricPalette("月光银", "#CED4DE", "#F5F7FF", "#A8C4EF", "#9EAABD", "#DCE5F5", "#B8C9E7")
+            new LyricPalette("月光银", "#CED4DE", "#F5F7FF", "#A8C4EF", "#9EAABD", "#DCE5F5", "#B8C9E7"),
+            new LyricPalette("晴空青", "#D0E8F2", "#55D9F2", "#587BFF", "#AFCBD8", "#A9F1FA", "#B5C7FF"),
+            new LyricPalette("深海蓝", "#C9D7EA", "#376FE8", "#39C6E8", "#A3B5CD", "#A8C7FF", "#9CEEFF"),
+            new LyricPalette("青柚苏打", "#D4E8D8", "#4DE6C1", "#B7F05B", "#ABC8B2", "#A4F6DE", "#E0F99B"),
+            new LyricPalette("松林薄雾", "#CCDFD2", "#46C99A", "#66D7D1", "#A5BEB0", "#9BEBC7", "#A7F0E8"),
+            new LyricPalette("薰衣草", "#DDD5F0", "#9675F5", "#E08CFF", "#B8ACD2", "#C4AEFF", "#F0B8FF"),
+            new LyricPalette("蓝莓奶昔", "#D6D8F0", "#697CFF", "#C16BFA", "#B0B3D0", "#AEBBFF", "#E0AFFF"),
+            new LyricPalette("樱花雨", "#F0D7E1", "#FF79B7", "#FF9CC9", "#D0B0BE", "#FFC0DC", "#FFE0ED"),
+            new LyricPalette("莓果汽水", "#E9D1E3", "#F04FA7", "#9B65F5", "#C8ACC3", "#FF9BD0", "#C4A4FF"),
+            new LyricPalette("珊瑚橘", "#F0D9CF", "#FF765E", "#FFB347", "#D0B6AD", "#FFAE91", "#FFD18A"),
+            new LyricPalette("蜜桃乌龙", "#EFDDD0", "#FF9D72", "#F6C35B", "#CFB9AB", "#FFC4A5", "#FFE3A0"),
+            new LyricPalette("鎏金暮色", "#E8DEC9", "#E7A83E", "#F06F63", "#C6B89F", "#F6CF78", "#FFAAA0"),
+            new LyricPalette("柠檬海盐", "#E3E8CC", "#E1F45E", "#62E4B2", "#C0C5A9", "#F1FAA0", "#A5F4D5"),
+            new LyricPalette("青提微风", "#D5E8D0", "#8CEB69", "#4CCFA8", "#B2C8AC", "#C6F7A5", "#9BEBD0"),
+            new LyricPalette("电光蓝", "#D1E1F2", "#24B8FF", "#5A68FF", "#AABDD2", "#8DE0FF", "#A7B0FF"),
+            new LyricPalette("极光绿", "#CFE6DD", "#35E6A3", "#42B8FF", "#A7C5B9", "#91F4C5", "#9ADFFF"),
+            new LyricPalette("幻彩紫", "#DDD3EA", "#A855F7", "#F05AD8", "#B9AAC8", "#D4A5FF", "#FFA5E8"),
+            new LyricPalette("玫瑰红", "#ECD4D9", "#FF536B", "#FF8A72", "#CDB0B6", "#FF9BA9", "#FFC1A8"),
+            new LyricPalette("暖阳金", "#EAE0C9", "#FFD84D", "#FF9D42", "#C9BDA5", "#FFEB88", "#FFC37B"),
+            new LyricPalette("冰蓝薄荷", "#D0E7E8", "#69E7F2", "#78E8B5", "#A9C6C7", "#AFF7F7", "#B3F5D4"),
+            new LyricPalette("葡萄汽泡", "#DDD7E9", "#7555D9", "#D957C8", "#B7AFC5", "#B8A6FF", "#F29BEA"),
+            new LyricPalette("夜幕蓝", "#BFCFE2", "#5276D8", "#42B8C9", "#98A9BF", "#9AB7FF", "#8DE4EB"),
+            new LyricPalette("暮光紫", "#D5CBE6", "#6653B8", "#AA5ACB", "#B0A4C1", "#A99AEF", "#D895E6"),
+            new LyricPalette("赤焰流星", "#E9D1CD", "#E94B55", "#F08A3C", "#C8AAA6", "#FF9694", "#FFC078"),
+            new LyricPalette("彩虹糖", "#E4D7ED", "#52C8F5", "#F45DAB", "#C1B0CB", "#9DEAFF", "#FFB1D5")
         };
     }
 
