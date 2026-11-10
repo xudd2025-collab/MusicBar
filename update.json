@@ -1,15 +1,15 @@
 {
-  "version": "1.0.26",
-  "notes": "- 修复安装向导许可协议页面仍显示英文 MIT 正文的问题，改为简体中文译文；原始许可文件继续随程序保留。",
-  "release_url": "https://github.com/xudd2025-collab/MusicBar/releases/tag/v1.0.26",
+  "version": "1.0.27",
+  "notes": "- 配色库由 8 套扩展至 32 套，新增多组青蓝、绿、紫、粉、红、橙与金色搭配；设置页可滚动浏览全部色卡，并可切换纯色与渐变。\n- 新增按日期保存、超限自动分段的诊断日志，记录播放器状态、歌词查找和接口结果，便于排查偶发的歌词问题；日志保存在本地数据目录，不随软件关闭清除。\n- 改进 QQ 音乐未提供专辑信息时的歌词匹配：只接受歌名、艺人和时长均严格吻合且无歧义的版本，避免选错歌曲。",
+  "release_url": "https://github.com/xudd2025-collab/MusicBar/releases/tag/v1.0.27",
   "installer": {
-    "name": "MusicBar-Setup-1.0.26.exe",
-    "sha256": "451b7669030e21e7d544edd6511916ee3041043f63338fd4bf0864a8116681ca",
+    "name": "MusicBar-Setup-1.0.27.exe",
+    "sha256": "5d4e1599a388f5a6eda12b13cfecd5e2b9ee406e389b027c4741520b334c2817",
     "urls": [
-      "https://github.com/xudd2025-collab/MusicBar/releases/download/v1.0.26/MusicBar-Setup-1.0.26.exe",
-      "https://raw.githubusercontent.com/xudd2025-collab/MusicBar/updates/releases/v1.0.26/MusicBar-Setup-1.0.26.exe",
-      "https://cdn.jsdelivr.net/gh/xudd2025-collab/MusicBar@updates/releases/v1.0.26/MusicBar-Setup-1.0.26.exe",
-      "https://fastly.jsdelivr.net/gh/xudd2025-collab/MusicBar@updates/releases/v1.0.26/MusicBar-Setup-1.0.26.exe"
+      "https://github.com/xudd2025-collab/MusicBar/releases/download/v1.0.27/MusicBar-Setup-1.0.27.exe",
+      "https://raw.githubusercontent.com/xudd2025-collab/MusicBar/updates/releases/v1.0.27/MusicBar-Setup-1.0.27.exe",
+      "https://cdn.jsdelivr.net/gh/xudd2025-collab/MusicBar@updates/releases/v1.0.27/MusicBar-Setup-1.0.27.exe",
+      "https://fastly.jsdelivr.net/gh/xudd2025-collab/MusicBar@updates/releases/v1.0.27/MusicBar-Setup-1.0.27.exe"
     ]
   }
 }
